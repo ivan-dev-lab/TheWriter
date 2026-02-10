@@ -1,0 +1,19 @@
+[project]
+name = "thewriter"
+version = "0.1.0"
+description = "Desktop markdown trading plan editor."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "PySide6>=6.6",
+  "markdown>=3.5",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+

@@ -1,0 +1,2 @@
+"""TheWriter application package."""
+
