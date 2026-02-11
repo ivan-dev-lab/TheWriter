@@ -5,7 +5,7 @@ import html
 from pathlib import Path
 import re
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -26,12 +26,14 @@ from PySide6.QtWidgets import (
     QWidget,
     QLineEdit,
     QStackedWidget,
+    QStyle,
 )
 
 from ..core.autosave import AutoSaveController
-from ..core.plans import TradingPlan, apply_title_to_markdown
+from ..core.plans import TradingPlan, apply_title_to_markdown, find_first_image_without_text
 from ..core.storage import PlanFileInfo, build_draft_path, list_markdown_files, read_markdown, save_markdown
 from ..settings import AppSettings
+from .current_situation import CurrentSituationEditor
 
 try:
     import markdown as markdown_renderer
@@ -39,7 +41,32 @@ except ImportError:
     markdown_renderer = None
 
 
+class DetachedPreviewWindow(QMainWindow):
+    closed = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Markdown-превью")
+        self.resize(900, 700)
+        self.preview_browser = QTextBrowser(self)
+        self.setCentralWidget(self.preview_browser)
+
+    def set_preview_html(self, html_content: str, base_dir: Path | None) -> None:
+        if base_dir:
+            self.preview_browser.document().setBaseUrl(QUrl.fromLocalFile(str(base_dir) + "/"))
+        self.preview_browser.setHtml(html_content)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self.closed.emit()
+        super().closeEvent(event)
+
+
 class MainWindow(QMainWindow):
+    SIDEBAR_COLLAPSE_WIDTH = 120
+    SIDEBAR_DEFAULT_WIDTH = 290
+    PREVIEW_COLLAPSE_WIDTH = 170
+    PREVIEW_DEFAULT_WIDTH = 420
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -55,6 +82,9 @@ class MainWindow(QMainWindow):
         self.current_plan = TradingPlan.empty()
         self.file_cache: list[PlanFileInfo] = []
         self._updating = False
+        self._sidebar_last_width = self.SIDEBAR_DEFAULT_WIDTH
+        self._preview_last_width = self.PREVIEW_DEFAULT_WIDTH
+        self.detached_preview_window: DetachedPreviewWindow | None = None
 
         self.setWindowTitle("TheWriter - Торговые планы[*]")
         self.setMinimumSize(1180, 760)
@@ -102,9 +132,31 @@ class MainWindow(QMainWindow):
         self.refresh_action.setShortcut(QKeySequence("F5"))
         self.refresh_action.triggered.connect(self._refresh_file_list)
 
+        self.toggle_sidebar_action = QAction("Показать файлы", self)
+        self.toggle_sidebar_action.setCheckable(True)
+        self.toggle_sidebar_action.setChecked(True)
+        self.toggle_sidebar_action.setShortcut(QKeySequence("Ctrl+B"))
+        self.toggle_sidebar_action.toggled.connect(self._toggle_sidebar)
+
+        self.toggle_preview_action = QAction("Показать превью", self)
+        self.toggle_preview_action.setCheckable(True)
+        self.toggle_preview_action.setChecked(True)
+        self.toggle_preview_action.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        self.toggle_preview_action.toggled.connect(self._toggle_preview)
+
+        self.open_detached_preview_action = QAction("Превью в отдельном окне", self)
+        self.open_detached_preview_action.setCheckable(True)
+        self.open_detached_preview_action.setChecked(False)
+        self.open_detached_preview_action.setShortcut(QKeySequence("Ctrl+Shift+W"))
+        self.open_detached_preview_action.toggled.connect(self._toggle_detached_preview)
+
+        self._update_toggle_icons()
+
     def _build_ui(self) -> None:
         toolbar = QToolBar("Панель")
         toolbar.setMovable(False)
+        toolbar.addAction(self.toggle_sidebar_action)
+        toolbar.addSeparator()
         toolbar.addAction(self.open_directory_action)
         toolbar.addAction(self.new_plan_action)
         toolbar.addSeparator()
@@ -112,6 +164,9 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.save_as_action)
         toolbar.addSeparator()
         toolbar.addAction(self.refresh_action)
+        toolbar.addSeparator()
+        toolbar.addAction(self.toggle_preview_action)
+        toolbar.addAction(self.open_detached_preview_action)
         self.addToolBar(toolbar)
 
         root = QWidget(self)
@@ -119,13 +174,19 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(12, 12, 12, 12)
         root_layout.setSpacing(10)
 
-        outer_splitter = QSplitter(Qt.Orientation.Horizontal)
-        outer_splitter.addWidget(self._build_sidebar())
-        outer_splitter.addWidget(self._build_editor_with_preview())
-        outer_splitter.setStretchFactor(0, 0)
-        outer_splitter.setStretchFactor(1, 1)
-        outer_splitter.setSizes([290, 890])
-        root_layout.addWidget(outer_splitter)
+        self.outer_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.outer_splitter.setChildrenCollapsible(True)
+
+        self.sidebar_panel = self._build_sidebar()
+        self.outer_splitter.addWidget(self.sidebar_panel)
+        self.outer_splitter.addWidget(self._build_editor_with_preview())
+        self.outer_splitter.setCollapsible(0, True)
+        self.outer_splitter.setCollapsible(1, False)
+        self.outer_splitter.setStretchFactor(0, 0)
+        self.outer_splitter.setStretchFactor(1, 1)
+        self.outer_splitter.setSizes([self.SIDEBAR_DEFAULT_WIDTH, 890])
+        self.outer_splitter.splitterMoved.connect(self._on_outer_splitter_moved)
+        root_layout.addWidget(self.outer_splitter)
 
         self.setCentralWidget(root)
         self._build_status_bar()
@@ -150,8 +211,8 @@ class MainWindow(QMainWindow):
         return sidebar
 
     def _build_editor_with_preview(self) -> QWidget:
-        content_splitter = QSplitter(Qt.Orientation.Horizontal)
-        content_splitter.setChildrenCollapsible(False)
+        self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.content_splitter.setChildrenCollapsible(True)
 
         left_panel = QWidget(self)
         left_layout = QVBoxLayout(left_panel)
@@ -171,24 +232,28 @@ class MainWindow(QMainWindow):
         self.editor_stack.addWidget(self.raw_page)
         left_layout.addWidget(self.editor_stack, 1)
 
-        preview_panel = QWidget(self)
-        preview_layout = QVBoxLayout(preview_panel)
+        self.preview_panel = QWidget(self)
+        self.preview_panel.setMinimumWidth(120)
+        preview_layout = QVBoxLayout(self.preview_panel)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(8)
         preview_layout.addWidget(QLabel("Markdown-превью"))
         self.preview_browser = QTextBrowser()
         preview_layout.addWidget(self.preview_browser, 1)
 
-        content_splitter.addWidget(left_panel)
-        content_splitter.addWidget(preview_panel)
-        content_splitter.setStretchFactor(0, 1)
-        content_splitter.setStretchFactor(1, 1)
-        content_splitter.setSizes([590, 450])
+        self.content_splitter.addWidget(left_panel)
+        self.content_splitter.addWidget(self.preview_panel)
+        self.content_splitter.setCollapsible(0, False)
+        self.content_splitter.setCollapsible(1, True)
+        self.content_splitter.setStretchFactor(0, 1)
+        self.content_splitter.setStretchFactor(1, 0)
+        self.content_splitter.setSizes([590, self.PREVIEW_DEFAULT_WIDTH])
+        self.content_splitter.splitterMoved.connect(self._on_content_splitter_moved)
 
         wrapper = QWidget(self)
         wrapper_layout = QHBoxLayout(wrapper)
         wrapper_layout.setContentsMargins(0, 0, 0, 0)
-        wrapper_layout.addWidget(content_splitter)
+        wrapper_layout.addWidget(self.content_splitter)
         return wrapper
 
     def _build_structured_page(self) -> QWidget:
@@ -198,23 +263,44 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
 
         layout.addWidget(QLabel("1. Описание текущей ситуации"))
-        self.block1_editor = QPlainTextEdit()
-        self.block1_editor.setPlaceholderText("Контекст рынка, ключевые факторы, текущие уровни...")
-        self.block1_editor.setMinimumHeight(150)
-        layout.addWidget(self.block1_editor, 1)
+        self.current_situation_editor = CurrentSituationEditor(self)
+        layout.addWidget(self.current_situation_editor, 2)
 
         layout.addWidget(QLabel("2. Описание сценариев перехода к сделкам"))
-        self.block2_editor = QPlainTextEdit()
-        self.block2_editor.setPlaceholderText("Условия, при которых вы переходите к открытию позиции...")
-        self.block2_editor.setMinimumHeight(150)
-        layout.addWidget(self.block2_editor, 1)
+        block2_widget, self.block2_editor = self._create_block_editor(
+            placeholder="Условия, при которых вы переходите к открытию позиции...",
+            block_index=2,
+        )
+        layout.addWidget(block2_widget, 1)
 
         layout.addWidget(QLabel("3. Описание сценариев сделок"))
-        self.block3_editor = QPlainTextEdit()
-        self.block3_editor.setPlaceholderText("Точки входа, риски, цели, сопровождение позиции...")
-        self.block3_editor.setMinimumHeight(150)
-        layout.addWidget(self.block3_editor, 1)
+        block3_widget, self.block3_editor = self._create_block_editor(
+            placeholder="Точки входа, риски, цели, сопровождение позиции...",
+            block_index=3,
+        )
+        layout.addWidget(block3_widget, 1)
         return page
+
+    def _create_block_editor(self, placeholder: str, block_index: int) -> tuple[QWidget, QPlainTextEdit]:
+        container = QWidget(self)
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(6)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        add_image_button = QPushButton("Добавить картинку + текст")
+        add_image_button.clicked.connect(
+            lambda _checked=False, idx=block_index: self._insert_image_with_text(idx)
+        )
+        button_row.addWidget(add_image_button)
+        container_layout.addLayout(button_row)
+
+        editor = QPlainTextEdit()
+        editor.setPlaceholderText(placeholder)
+        editor.setMinimumHeight(140)
+        container_layout.addWidget(editor, 1)
+        return container, editor
 
     def _build_raw_page(self) -> QWidget:
         page = QWidget(self)
@@ -255,17 +341,235 @@ class MainWindow(QMainWindow):
         self.file_list.itemActivated.connect(self._open_item)
 
         self.title_edit.textChanged.connect(self._on_editor_changed)
-        self.block1_editor.textChanged.connect(self._on_editor_changed)
+        self.current_situation_editor.content_changed.connect(self._on_editor_changed)
         self.block2_editor.textChanged.connect(self._on_editor_changed)
         self.block3_editor.textChanged.connect(self._on_editor_changed)
         self.raw_editor.textChanged.connect(self._on_editor_changed)
         self.normalize_button.clicked.connect(self._normalize_raw_document)
+
+    def _update_toggle_icons(self) -> None:
+        if self.toggle_sidebar_action.isChecked():
+            self.toggle_sidebar_action.setIcon(
+                self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowLeft)
+            )
+        else:
+            self.toggle_sidebar_action.setIcon(
+                self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight)
+            )
+
+        if self.toggle_preview_action.isChecked():
+            self.toggle_preview_action.setIcon(
+                self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight)
+            )
+        else:
+            self.toggle_preview_action.setIcon(
+                self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowLeft)
+            )
+
+        self.open_detached_preview_action.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarMaxButton)
+        )
+
+    def _toggle_sidebar(self, visible: bool) -> None:
+        self._apply_sidebar_visibility(visible)
+        self._update_toggle_icons()
+
+    def _apply_sidebar_visibility(self, visible: bool) -> None:
+        if visible:
+            self.sidebar_panel.show()
+            total_width = max(700, self.outer_splitter.size().width())
+            sidebar_width = max(self.SIDEBAR_COLLAPSE_WIDTH + 40, self._sidebar_last_width)
+            sidebar_width = min(sidebar_width, total_width - 420)
+            self.outer_splitter.setSizes([sidebar_width, total_width - sidebar_width])
+            return
+
+        sizes = self.outer_splitter.sizes()
+        if len(sizes) > 1 and sizes[0] > self.SIDEBAR_COLLAPSE_WIDTH:
+            self._sidebar_last_width = sizes[0]
+        self.sidebar_panel.hide()
+        self.outer_splitter.setSizes([0, 1])
+
+    def _on_outer_splitter_moved(self, _: int, __: int) -> None:
+        if not self.toggle_sidebar_action.isChecked():
+            return
+
+        sizes = self.outer_splitter.sizes()
+        if len(sizes) < 2:
+            return
+
+        sidebar_width = sizes[0]
+        if sidebar_width <= self.SIDEBAR_COLLAPSE_WIDTH:
+            self.toggle_sidebar_action.blockSignals(True)
+            self.toggle_sidebar_action.setChecked(False)
+            self.toggle_sidebar_action.blockSignals(False)
+            self._apply_sidebar_visibility(False)
+            self._update_toggle_icons()
+            self.statusBar().showMessage("Панель файлов скрыта: ширина слишком маленькая", 3000)
+            return
+
+        self._sidebar_last_width = sidebar_width
+
+    def _toggle_preview(self, visible: bool) -> None:
+        self._apply_preview_visibility(visible)
+        self._update_toggle_icons()
+
+    def _apply_preview_visibility(self, visible: bool) -> None:
+        if visible:
+            self.preview_panel.show()
+            total_width = max(500, self.content_splitter.size().width())
+            preview_width = max(self.PREVIEW_COLLAPSE_WIDTH + 40, self._preview_last_width)
+            preview_width = min(preview_width, total_width - 260)
+            self.content_splitter.setSizes([total_width - preview_width, preview_width])
+            self._schedule_preview_refresh()
+            return
+
+        sizes = self.content_splitter.sizes()
+        if len(sizes) > 1 and sizes[1] > self.PREVIEW_COLLAPSE_WIDTH:
+            self._preview_last_width = sizes[1]
+        self.preview_panel.hide()
+        self.content_splitter.setSizes([1, 0])
+
+    def _on_content_splitter_moved(self, _: int, __: int) -> None:
+        if not self.toggle_preview_action.isChecked():
+            return
+
+        sizes = self.content_splitter.sizes()
+        if len(sizes) < 2:
+            return
+
+        preview_width = sizes[1]
+        if preview_width <= self.PREVIEW_COLLAPSE_WIDTH:
+            self.toggle_preview_action.blockSignals(True)
+            self.toggle_preview_action.setChecked(False)
+            self.toggle_preview_action.blockSignals(False)
+            self._apply_preview_visibility(False)
+            self._update_toggle_icons()
+            self.statusBar().showMessage("Превью скрыто: ширина стала слишком маленькой", 3000)
+            return
+
+        self._preview_last_width = preview_width
+
+    def _toggle_detached_preview(self, visible: bool) -> None:
+        if visible:
+            if self.detached_preview_window is None:
+                self.detached_preview_window = DetachedPreviewWindow(self)
+                self.detached_preview_window.closed.connect(self._on_detached_preview_closed)
+            self.detached_preview_window.show()
+            self.detached_preview_window.raise_()
+            self.detached_preview_window.activateWindow()
+            self._schedule_preview_refresh()
+            return
+
+        if self.detached_preview_window is not None:
+            self.detached_preview_window.close()
+
+    def _on_detached_preview_closed(self) -> None:
+        self.open_detached_preview_action.blockSignals(True)
+        self.open_detached_preview_action.setChecked(False)
+        self.open_detached_preview_action.blockSignals(False)
+
+    def _get_block_editor(self, block_index: int) -> QPlainTextEdit | None:
+        mapping = {
+            2: self.block2_editor,
+            3: self.block3_editor,
+        }
+        return mapping.get(block_index)
+
+    def _format_image_markdown_path(self, image_path: Path) -> str:
+        base_dir = self.current_file.parent if self.current_file else self.current_directory
+        if base_dir:
+            try:
+                return image_path.relative_to(base_dir).as_posix()
+            except ValueError:
+                pass
+        return image_path.as_posix()
+
+    def _insert_image_with_text(self, block_index: int) -> None:
+        editor = self._get_block_editor(block_index)
+        if editor is None:
+            return
+
+        start_dir = self.current_directory or Path.home()
+        image_file, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите картинку",
+            str(start_dir),
+            "Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.svg)",
+        )
+        if not image_file:
+            return
+
+        text_under_image, accepted = QInputDialog.getMultiLineText(
+            self,
+            "Текст под картинкой",
+            "Введите обязательный текст под изображением:",
+        )
+        if not accepted:
+            return
+
+        body_text = text_under_image.strip()
+        if not body_text:
+            QMessageBox.warning(
+                self,
+                "Нужен текст",
+                "После картинки должен быть текст. Вставка отменена.",
+            )
+            return
+
+        image_path = Path(image_file)
+        markdown_path = self._format_image_markdown_path(image_path)
+        alt_text = image_path.stem.strip() or "image"
+        snippet = f"![{alt_text}]({markdown_path})\n{body_text}\n"
+
+        cursor = editor.textCursor()
+        if cursor.position() > 0:
+            cursor.insertText("\n")
+        cursor.insertText(snippet)
+        editor.setTextCursor(cursor)
+        editor.setFocus()
+
+    def _validate_image_text_rules(self, explicit: bool) -> bool:
+        if not self._editor_in_structured_mode():
+            return True
+
+        ok, message = self.current_situation_editor.validate_content()
+        if not ok:
+            self._set_autosave_status("Автосохранение: заполните блок 1")
+            self.statusBar().showMessage(message, 8000)
+            if explicit:
+                QMessageBox.warning(self, "Проверьте блок 1", message)
+            return False
+
+        checks = [
+            ("2. Описание сценариев перехода к сделкам", self.block2_editor.toPlainText()),
+            ("3. Описание сценариев сделок", self.block3_editor.toPlainText()),
+        ]
+        for block_title, block_text in checks:
+            bad_line = find_first_image_without_text(block_text)
+            if bad_line is None:
+                continue
+
+            message = (
+                f"В блоке '{block_title}' у изображения на строке {bad_line} "
+                "отсутствует обязательный текст под картинкой."
+            )
+            self._set_autosave_status("Автосохранение: добавьте текст под картинкой")
+            self.statusBar().showMessage(message, 8000)
+
+            if explicit:
+                QMessageBox.warning(self, "Проверьте изображения", message)
+            return False
+        return True
 
     def _set_autosave_status(self, text: str) -> None:
         self.autosave_status_label.setText(text)
 
     def _set_saved_now(self) -> None:
         self.last_saved_label.setText(f"Последнее сохранение: {datetime.now().strftime('%H:%M:%S')}")
+
+    def _sync_current_situation_base_dir(self) -> None:
+        if self._editor_in_structured_mode():
+            self.current_situation_editor.set_base_directory(self._current_preview_base_dir())
 
     def _update_file_status_label(self) -> None:
         if self.current_file:
@@ -301,6 +605,7 @@ class MainWindow(QMainWindow):
         self.current_directory = Path(selected)
         self.settings.last_directory = str(self.current_directory)
         self.settings.save()
+        self._sync_current_situation_base_dir()
         self._refresh_file_list()
 
     def _refresh_file_list(self, show_message: bool = True) -> None:
@@ -363,6 +668,7 @@ class MainWindow(QMainWindow):
         self.current_file = path
         self.current_draft_path = None
         self.current_plan = plan
+        self._sync_current_situation_base_dir()
         self._load_plan_into_ui(plan)
         self.autosave.clear_dirty()
         self._set_autosave_status("Автосохранение: ✓")
@@ -382,14 +688,15 @@ class MainWindow(QMainWindow):
 
         if plan.structured:
             self.editor_stack.setCurrentWidget(self.structured_page)
-            self.block1_editor.setPlainText(plan.block1)
+            self.current_situation_editor.set_base_directory(self._current_preview_base_dir())
+            self.current_situation_editor.load_from_markdown(plan.block1)
             self.block2_editor.setPlainText(plan.block2)
             self.block3_editor.setPlainText(plan.block3)
             self.raw_editor.setPlainText("")
         else:
             self.editor_stack.setCurrentWidget(self.raw_page)
             self.raw_editor.setPlainText(plan.raw_markdown)
-            self.block1_editor.setPlainText("")
+            self.current_situation_editor.load_from_markdown("")
             self.block2_editor.setPlainText("")
             self.block3_editor.setPlainText("")
 
@@ -408,6 +715,7 @@ class MainWindow(QMainWindow):
         self.current_plan = plan
         self.current_file = None
         self.current_draft_path = None
+        self._sync_current_situation_base_dir()
         self._load_plan_into_ui(plan)
         self.autosave.clear_dirty()
         self._set_autosave_status("Автосохранение: ✓")
@@ -445,7 +753,7 @@ class MainWindow(QMainWindow):
             extras = self.current_plan.extras if self.current_plan.structured else ""
             plan = TradingPlan(
                 title=title,
-                block1=self.block1_editor.toPlainText(),
+                block1=self.current_situation_editor.to_markdown(),
                 block2=self.block2_editor.toPlainText(),
                 block3=self.block3_editor.toPlainText(),
                 extras=extras,
@@ -468,7 +776,8 @@ class MainWindow(QMainWindow):
         return True
 
     def _save_internal(self, explicit: bool, save_as: bool = False, autosave: bool = False) -> bool:
-        markdown, plan = self._compose_current_markdown()
+        if not self._validate_image_text_rules(explicit=explicit):
+            return False
 
         target_path: Path | None = None
         if save_as:
@@ -490,6 +799,10 @@ class MainWindow(QMainWindow):
                 self.current_draft_path = build_draft_path(self.current_directory)
             target_path = self.current_draft_path
 
+        if self._editor_in_structured_mode():
+            self.current_situation_editor.set_base_directory(target_path.parent if target_path else self._current_preview_base_dir())
+        markdown, plan = self._compose_current_markdown()
+
         if not self._save_to_target(target=target_path, markdown=markdown, explicit=explicit):
             return False
 
@@ -505,6 +818,7 @@ class MainWindow(QMainWindow):
             self.settings.last_directory = str(self.current_directory)
             self.settings.touch_recent_file(str(target_path))
             self.settings.save()
+            self._sync_current_situation_base_dir()
             self._refresh_file_list(show_message=False)
         elif autosave and self.current_file is None:
             self.current_draft_path = target_path
@@ -542,7 +856,7 @@ class MainWindow(QMainWindow):
 
         answer = QMessageBox.question(
             self,
-            "Изменения не сохранены",
+            "зменения не сохранены",
             "Не удалось сохранить изменения автоматически. Продолжить и потерять несохранённые правки?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -567,7 +881,17 @@ class MainWindow(QMainWindow):
         markdown, _ = self._compose_current_markdown()
         return markdown
 
+    def _current_preview_base_dir(self) -> Path | None:
+        return self.current_file.parent if self.current_file else self.current_directory
+
     def _update_preview(self) -> None:
+        has_side_preview = self.toggle_preview_action.isChecked()
+        has_detached_preview = (
+            self.open_detached_preview_action.isChecked() and self.detached_preview_window is not None
+        )
+        if not has_side_preview and not has_detached_preview:
+            return
+
         markdown = self._preview_markdown()
         if markdown_renderer is None:
             body = f"<pre>{html.escape(markdown)}</pre>"
@@ -584,7 +908,18 @@ class MainWindow(QMainWindow):
                 line-height: 1.5;
                 color: #1c2530;
                 background: #ffffff;
-                margin: 12px;
+                margin: 10px;
+              }}
+              p {{
+                margin: 4px 0;
+              }}
+              img {{
+                display: block;
+                max-width: 100%;
+                max-height: 58vh;
+                height: auto;
+                margin: 0 0 4px 0;
+                border-radius: 6px;
               }}
               pre {{
                 background: #f7f8fa;
@@ -609,7 +944,13 @@ class MainWindow(QMainWindow):
           <body>{body}</body>
         </html>
         """
-        self.preview_browser.setHtml(rendered)
+        base_dir = self._current_preview_base_dir()
+        if has_side_preview and base_dir:
+            self.preview_browser.document().setBaseUrl(QUrl.fromLocalFile(str(base_dir) + "/"))
+        if has_side_preview:
+            self.preview_browser.setHtml(rendered)
+        if has_detached_preview and self.detached_preview_window is not None:
+            self.detached_preview_window.set_preview_html(rendered, base_dir)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         if self._ensure_saved_before_navigation():

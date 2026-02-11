@@ -1,4 +1,9 @@
-from app.core.plans import SECTION_DEFINITIONS, TradingPlan, apply_title_to_markdown
+from app.core.plans import (
+    SECTION_DEFINITIONS,
+    TradingPlan,
+    apply_title_to_markdown,
+    find_first_image_without_text,
+)
 
 
 def test_structured_parse_and_extras_preserved() -> None:
@@ -61,3 +66,12 @@ def test_normalize_raw_creates_structured_plan() -> None:
     assert normalized.block2 == ""
     assert normalized.block3 == ""
 
+
+def test_image_caption_validation_ok() -> None:
+    block = "![img](chart.png)\n\nОписание под картинкой\n\nТекст дальше."
+    assert find_first_image_without_text(block) is None
+
+
+def test_image_caption_validation_fails_when_missing_text() -> None:
+    block = "![img](chart.png)\n\n![img2](chart2.png)\n"
+    assert find_first_image_without_text(block) == 1

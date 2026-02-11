@@ -11,6 +11,7 @@ SECTION_DEFINITIONS: list[tuple[str, str]] = [
 
 _TITLE_RE = re.compile(r"(?m)^\s*#\s+(.+?)\s*$")
 _H2_RE = re.compile(r"(?m)^##\s+(.+?)\s*$")
+_IMAGE_LINE_RE = re.compile(r"^!\[[^\]]*]\([^)]+\)\s*$")
 
 
 def _normalize_heading(value: str) -> str:
@@ -142,3 +143,26 @@ def apply_title_to_markdown(markdown: str, title: str) -> str:
 
     return f"# {clean_title}\n\n"
 
+
+def find_first_image_without_text(markdown_block: str) -> int | None:
+    lines = markdown_block.splitlines()
+
+    for index, raw_line in enumerate(lines):
+        line = raw_line.strip()
+        if not _IMAGE_LINE_RE.match(line):
+            continue
+
+        has_text_below = False
+        for next_raw in lines[index + 1 :]:
+            next_line = next_raw.strip()
+            if not next_line:
+                continue
+            if _IMAGE_LINE_RE.match(next_line):
+                break
+            has_text_below = True
+            break
+
+        if not has_text_below:
+            return index + 1
+
+    return None
