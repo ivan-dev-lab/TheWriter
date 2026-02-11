@@ -37,6 +37,7 @@ from ..core.plans import TradingPlan, apply_title_to_markdown, find_first_image_
 from ..core.storage import PlanFileInfo, build_draft_path, list_markdown_files, read_markdown, save_markdown
 from ..settings import AppSettings
 from .current_situation import CurrentSituationEditor
+from .transition_scenarios import TransitionScenariosEditor
 
 try:
     import markdown as markdown_renderer
@@ -299,11 +300,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.current_situation_editor)
 
         layout.addWidget(QLabel("2. Описание сценариев перехода к сделкам"))
-        block2_widget, self.block2_editor = self._create_block_editor(
-            placeholder="Условия, при которых вы переходите к открытию позиции...",
-            block_index=2,
-        )
-        layout.addWidget(block2_widget)
+        self.transition_scenarios_editor = TransitionScenariosEditor(self)
+        self.transition_scenarios_editor.setMinimumHeight(320)
+        layout.addWidget(self.transition_scenarios_editor)
 
         layout.addWidget(QLabel("3. Описание сценариев сделок"))
         block3_widget, self.block3_editor = self._create_block_editor(
@@ -380,7 +379,7 @@ class MainWindow(QMainWindow):
 
         self.title_edit.textChanged.connect(self._on_editor_changed)
         self.current_situation_editor.content_changed.connect(self._on_editor_changed)
-        self.block2_editor.textChanged.connect(self._on_editor_changed)
+        self.transition_scenarios_editor.content_changed.connect(self._on_editor_changed)
         self.block3_editor.textChanged.connect(self._on_editor_changed)
         self.raw_editor.textChanged.connect(self._on_editor_changed)
         self.normalize_button.clicked.connect(self._normalize_raw_document)
@@ -508,7 +507,6 @@ class MainWindow(QMainWindow):
 
     def _get_block_editor(self, block_index: int) -> QPlainTextEdit | None:
         mapping = {
-            2: self.block2_editor,
             3: self.block3_editor,
         }
         return mapping.get(block_index)
@@ -578,8 +576,15 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Проверьте блок 1", message)
             return False
 
+        ok, message = self.transition_scenarios_editor.validate_content()
+        if not ok:
+            self._set_autosave_status("Автосохранение: заполните блок 2")
+            self.statusBar().showMessage(message, 8000)
+            if explicit:
+                QMessageBox.warning(self, "Проверьте блок 2", message)
+            return False
+
         checks = [
-            ("2. Описание сценариев перехода к сделкам", self.block2_editor.toPlainText()),
             ("3. Описание сценариев сделок", self.block3_editor.toPlainText()),
         ]
         for block_title, block_text in checks:
@@ -605,9 +610,11 @@ class MainWindow(QMainWindow):
     def _set_saved_now(self) -> None:
         self.last_saved_label.setText(f"Последнее сохранение: {datetime.now().strftime('%H:%M:%S')}")
 
-    def _sync_current_situation_base_dir(self) -> None:
+    def _sync_structured_editors_base_dir(self) -> None:
         if self._editor_in_structured_mode():
-            self.current_situation_editor.set_base_directory(self._current_preview_base_dir())
+            base_dir = self._current_preview_base_dir()
+            self.current_situation_editor.set_base_directory(base_dir)
+            self.transition_scenarios_editor.set_base_directory(base_dir)
 
     def _update_file_status_label(self) -> None:
         if self.current_file:
@@ -643,7 +650,7 @@ class MainWindow(QMainWindow):
         self.current_directory = Path(selected)
         self.settings.last_directory = str(self.current_directory)
         self.settings.save()
-        self._sync_current_situation_base_dir()
+        self._sync_structured_editors_base_dir()
         self._refresh_file_list()
 
     def _refresh_file_list(self, show_message: bool = True) -> None:
@@ -706,7 +713,7 @@ class MainWindow(QMainWindow):
         self.current_file = path
         self.current_draft_path = None
         self.current_plan = plan
-        self._sync_current_situation_base_dir()
+        self._sync_structured_editors_base_dir()
         self._load_plan_into_ui(plan)
         self.autosave.clear_dirty()
         self._set_autosave_status("Автосохранение: ✓")
@@ -727,15 +734,16 @@ class MainWindow(QMainWindow):
         if plan.structured:
             self.editor_stack.setCurrentWidget(self.structured_page)
             self.current_situation_editor.set_base_directory(self._current_preview_base_dir())
+            self.transition_scenarios_editor.set_base_directory(self._current_preview_base_dir())
             self.current_situation_editor.load_from_markdown(plan.block1)
-            self.block2_editor.setPlainText(plan.block2)
+            self.transition_scenarios_editor.load_from_markdown(plan.block2)
             self.block3_editor.setPlainText(plan.block3)
             self.raw_editor.setPlainText("")
         else:
             self.editor_stack.setCurrentWidget(self.raw_page)
             self.raw_editor.setPlainText(plan.raw_markdown)
             self.current_situation_editor.load_from_markdown("")
-            self.block2_editor.setPlainText("")
+            self.transition_scenarios_editor.load_from_markdown("")
             self.block3_editor.setPlainText("")
 
         self._updating = False
@@ -753,7 +761,7 @@ class MainWindow(QMainWindow):
         self.current_plan = plan
         self.current_file = None
         self.current_draft_path = None
-        self._sync_current_situation_base_dir()
+        self._sync_structured_editors_base_dir()
         self._load_plan_into_ui(plan)
         self.autosave.clear_dirty()
         self._set_autosave_status("Автосохранение: ✓")
@@ -792,7 +800,7 @@ class MainWindow(QMainWindow):
             plan = TradingPlan(
                 title=title,
                 block1=self.current_situation_editor.to_markdown(),
-                block2=self.block2_editor.toPlainText(),
+                block2=self.transition_scenarios_editor.to_markdown(),
                 block3=self.block3_editor.toPlainText(),
                 extras=extras,
                 structured=True,
@@ -838,7 +846,9 @@ class MainWindow(QMainWindow):
             target_path = self.current_draft_path
 
         if self._editor_in_structured_mode():
-            self.current_situation_editor.set_base_directory(target_path.parent if target_path else self._current_preview_base_dir())
+            base_dir = target_path.parent if target_path else self._current_preview_base_dir()
+            self.current_situation_editor.set_base_directory(base_dir)
+            self.transition_scenarios_editor.set_base_directory(base_dir)
         markdown, plan = self._compose_current_markdown()
 
         if not self._save_to_target(target=target_path, markdown=markdown, explicit=explicit):
@@ -856,7 +866,7 @@ class MainWindow(QMainWindow):
             self.settings.last_directory = str(self.current_directory)
             self.settings.touch_recent_file(str(target_path))
             self.settings.save()
-            self._sync_current_situation_base_dir()
+            self._sync_structured_editors_base_dir()
             self._refresh_file_list(show_message=False)
         elif autosave and self.current_file is None:
             self.current_draft_path = target_path
