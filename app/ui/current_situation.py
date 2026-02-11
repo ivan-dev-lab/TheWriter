@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
-from PySide6.QtCore import QStringListModel, Qt, Signal
+from PySide6.QtCore import QTimer, QStringListModel, Qt, Signal
 from PySide6.QtGui import QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
+    QLayout,
     QVBoxLayout,
     QWidget,
 )
@@ -188,6 +189,7 @@ class SituationEntryWidget(QFrame):
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setObjectName("situationCard")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
         self._base_dir: Path | None = None
         self._last_generated = ""
@@ -197,6 +199,7 @@ class SituationEntryWidget(QFrame):
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
+        root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         header = QHBoxLayout()
         self.title_label = QLabel("Картинка")
@@ -223,6 +226,7 @@ class SituationEntryWidget(QFrame):
 
         self.path_label = QLabel("")
         self.path_label.setWordWrap(True)
+        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         root.addWidget(self.path_label)
 
         tf_row = QHBoxLayout()
@@ -236,6 +240,9 @@ class SituationEntryWidget(QFrame):
 
         root.addWidget(QLabel("Нотация"))
         self.notation_edit = NotationTextEdit()
+        self.notation_edit.setFixedHeight(84)
+        self.notation_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.notation_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         root.addWidget(self.notation_edit)
 
         self.notation_status = QLabel("")
@@ -244,7 +251,10 @@ class SituationEntryWidget(QFrame):
         root.addWidget(QLabel("Текст под картинкой (ручное редактирование) *"))
         self.manual_edit = QPlainTextEdit()
         self.manual_edit.setPlaceholderText("Текст под картинкой")
-        self.manual_edit.setMinimumHeight(90)
+        self.manual_edit.setMinimumHeight(110)
+        self.manual_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.manual_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.manual_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         root.addWidget(self.manual_edit)
 
         self.image_path = data.image_path
@@ -262,6 +272,10 @@ class SituationEntryWidget(QFrame):
         self.timeframe_combo.currentIndexChanged.connect(lambda _: self.changed.emit())
         self.notation_edit.textChanged.connect(self._on_notation_changed)
         self.manual_edit.textChanged.connect(self._on_manual_changed)
+        manual_layout = self.manual_edit.document().documentLayout()
+        if manual_layout is not None:
+            manual_layout.documentSizeChanged.connect(self._update_manual_edit_height)
+        QTimer.singleShot(0, self._update_manual_edit_height)
 
     def set_index(self, index: int) -> None:
         self.title_label.setText(f"Картинка #{index}")
@@ -340,7 +354,21 @@ class SituationEntryWidget(QFrame):
     def _on_manual_changed(self) -> None:
         if self._updating_manual:
             return
+        self._update_manual_edit_height()
         self.changed.emit()
+
+    def _update_manual_edit_height(self, *_args) -> None:
+        document_layout = self.manual_edit.document().documentLayout()
+        if document_layout is None:
+            return
+        content_height = int(document_layout.documentSize().height())
+        margins = self.manual_edit.contentsMargins()
+        target_height = max(
+            110,
+            content_height + (self.manual_edit.frameWidth() * 2) + margins.top() + margins.bottom() + 12,
+        )
+        if self.manual_edit.height() != target_height:
+            self.manual_edit.setFixedHeight(target_height)
 
     def _resolve_image_path(self) -> Path:
         candidate = Path(self.image_path)
@@ -402,12 +430,14 @@ class CurrentSituationEditor(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self._base_dir: Path | None = None
         self._entries: list[SituationEntryWidget] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
+        root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         top_row = QHBoxLayout()
         self.add_image_button = QPushButton("Добавить картинку")
@@ -424,8 +454,10 @@ class CurrentSituationEditor(QWidget):
         self.entries_layout = QVBoxLayout(self.entries_container)
         self.entries_layout.setContentsMargins(0, 0, 0, 0)
         self.entries_layout.setSpacing(10)
+        self.entries_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.entries_layout.addStretch(1)
-        root.addWidget(self.entries_container, 1)
+        self.entries_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        root.addWidget(self.entries_container)
 
         self._update_empty_state()
 

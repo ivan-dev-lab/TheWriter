@@ -9,6 +9,7 @@ from PySide6.QtCore import QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -27,6 +28,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QStackedWidget,
     QStyle,
+    QScrollArea,
+    QSizePolicy,
 )
 
 from ..core.autosave import AutoSaveController
@@ -59,6 +62,33 @@ class DetachedPreviewWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.closed.emit()
         super().closeEvent(event)
+
+
+class AutoHeightPlainTextEdit(QPlainTextEdit):
+    def __init__(self, min_height: int = 160, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._min_height = min_height
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.textChanged.connect(self._update_height)
+        document_layout = self.document().documentLayout()
+        if document_layout is not None:
+            document_layout.documentSizeChanged.connect(self._update_height)
+        QTimer.singleShot(0, self._update_height)
+
+    def _update_height(self, *_args) -> None:
+        document_layout = self.document().documentLayout()
+        if document_layout is None:
+            return
+        content_height = int(document_layout.documentSize().height())
+        margins = self.contentsMargins()
+        target_height = max(
+            self._min_height,
+            content_height + (self.frameWidth() * 2) + margins.top() + margins.bottom() + 12,
+        )
+        if self.height() != target_height:
+            self.setFixedHeight(target_height)
 
 
 class MainWindow(QMainWindow):
@@ -257,29 +287,38 @@ class MainWindow(QMainWindow):
         return wrapper
 
     def _build_structured_page(self) -> QWidget:
-        page = QWidget(self)
-        layout = QVBoxLayout(page)
+        content = QWidget(self)
+        content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
         layout.addWidget(QLabel("1. Описание текущей ситуации"))
         self.current_situation_editor = CurrentSituationEditor(self)
-        layout.addWidget(self.current_situation_editor, 2)
+        self.current_situation_editor.setMinimumHeight(320)
+        layout.addWidget(self.current_situation_editor)
 
         layout.addWidget(QLabel("2. Описание сценариев перехода к сделкам"))
         block2_widget, self.block2_editor = self._create_block_editor(
             placeholder="Условия, при которых вы переходите к открытию позиции...",
             block_index=2,
         )
-        layout.addWidget(block2_widget, 1)
+        layout.addWidget(block2_widget)
 
         layout.addWidget(QLabel("3. Описание сценариев сделок"))
         block3_widget, self.block3_editor = self._create_block_editor(
             placeholder="Точки входа, риски, цели, сопровождение позиции...",
             block_index=3,
         )
-        layout.addWidget(block3_widget, 1)
-        return page
+        layout.addWidget(block3_widget)
+        layout.addStretch(1)
+
+        page_scroll = QScrollArea(self)
+        page_scroll.setWidgetResizable(True)
+        page_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        page_scroll.setWidget(content)
+        return page_scroll
 
     def _create_block_editor(self, placeholder: str, block_index: int) -> tuple[QWidget, QPlainTextEdit]:
         container = QWidget(self)
@@ -296,10 +335,9 @@ class MainWindow(QMainWindow):
         button_row.addWidget(add_image_button)
         container_layout.addLayout(button_row)
 
-        editor = QPlainTextEdit()
+        editor = AutoHeightPlainTextEdit(min_height=190, parent=self)
         editor.setPlaceholderText(placeholder)
-        editor.setMinimumHeight(140)
-        container_layout.addWidget(editor, 1)
+        container_layout.addWidget(editor)
         return container, editor
 
     def _build_raw_page(self) -> QWidget:
