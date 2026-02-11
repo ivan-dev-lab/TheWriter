@@ -537,6 +537,19 @@ class TransitionScenariosEditor(QWidget):
         chunks = [entry.to_markdown(index + 1, self._base_dir) for index, entry in enumerate(self._entries)]
         return "\n\n---\n\n".join(chunks).strip()
 
+    def scenario_choices(self) -> list[tuple[str, str]]:
+        choices: list[tuple[str, str]] = []
+        for index, entry in enumerate(self._entries, start=1):
+            data = entry.to_data()
+            reference = data.notation.strip() or f"Сценарий #{index}"
+            preview_source = data.notation.strip() or data.text.strip()
+            preview = re.sub(r"\s+", " ", preview_source).strip()
+            if len(preview) > 90:
+                preview = f"{preview[:87]}..."
+            label = f"Сценарий #{index}: {preview}" if preview else f"Сценарий #{index}"
+            choices.append((reference, label))
+        return choices
+
     def validate_content(self) -> tuple[bool, str]:
         if not self._entries:
             return False, "В разделе сценариев перехода нужен минимум один сценарий."

@@ -33,10 +33,11 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.autosave import AutoSaveController
-from ..core.plans import TradingPlan, apply_title_to_markdown, find_first_image_without_text
+from ..core.plans import TradingPlan, apply_title_to_markdown
 from ..core.storage import PlanFileInfo, build_draft_path, list_markdown_files, read_markdown, save_markdown
 from ..settings import AppSettings
 from .current_situation import CurrentSituationEditor
+from .deal_scenarios import DealScenariosEditor
 from .transition_scenarios import TransitionScenariosEditor
 
 try:
@@ -63,33 +64,6 @@ class DetachedPreviewWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.closed.emit()
         super().closeEvent(event)
-
-
-class AutoHeightPlainTextEdit(QPlainTextEdit):
-    def __init__(self, min_height: int = 160, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._min_height = min_height
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.textChanged.connect(self._update_height)
-        document_layout = self.document().documentLayout()
-        if document_layout is not None:
-            document_layout.documentSizeChanged.connect(self._update_height)
-        QTimer.singleShot(0, self._update_height)
-
-    def _update_height(self, *_args) -> None:
-        document_layout = self.document().documentLayout()
-        if document_layout is None:
-            return
-        content_height = int(document_layout.documentSize().height())
-        margins = self.contentsMargins()
-        target_height = max(
-            self._min_height,
-            content_height + (self.frameWidth() * 2) + margins.top() + margins.bottom() + 12,
-        )
-        if self.height() != target_height:
-            self.setFixedHeight(target_height)
 
 
 class MainWindow(QMainWindow):
@@ -305,11 +279,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.transition_scenarios_editor)
 
         layout.addWidget(QLabel("3. Описание сценариев сделок"))
-        block3_widget, self.block3_editor = self._create_block_editor(
-            placeholder="Точки входа, риски, цели, сопровождение позиции...",
-            block_index=3,
-        )
-        layout.addWidget(block3_widget)
+        self.deal_scenarios_editor = DealScenariosEditor(self)
+        self.deal_scenarios_editor.setMinimumHeight(320)
+        layout.addWidget(self.deal_scenarios_editor)
         layout.addStretch(1)
 
         page_scroll = QScrollArea(self)
@@ -318,26 +290,6 @@ class MainWindow(QMainWindow):
         page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         page_scroll.setWidget(content)
         return page_scroll
-
-    def _create_block_editor(self, placeholder: str, block_index: int) -> tuple[QWidget, QPlainTextEdit]:
-        container = QWidget(self)
-        container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setSpacing(6)
-
-        button_row = QHBoxLayout()
-        button_row.addStretch(1)
-        add_image_button = QPushButton("Добавить картинку + текст")
-        add_image_button.clicked.connect(
-            lambda _checked=False, idx=block_index: self._insert_image_with_text(idx)
-        )
-        button_row.addWidget(add_image_button)
-        container_layout.addLayout(button_row)
-
-        editor = AutoHeightPlainTextEdit(min_height=190, parent=self)
-        editor.setPlaceholderText(placeholder)
-        container_layout.addWidget(editor)
-        return container, editor
 
     def _build_raw_page(self) -> QWidget:
         page = QWidget(self)
@@ -379,8 +331,9 @@ class MainWindow(QMainWindow):
 
         self.title_edit.textChanged.connect(self._on_editor_changed)
         self.current_situation_editor.content_changed.connect(self._on_editor_changed)
+        self.transition_scenarios_editor.content_changed.connect(self._sync_deal_transition_choices)
         self.transition_scenarios_editor.content_changed.connect(self._on_editor_changed)
-        self.block3_editor.textChanged.connect(self._on_editor_changed)
+        self.deal_scenarios_editor.content_changed.connect(self._on_editor_changed)
         self.raw_editor.textChanged.connect(self._on_editor_changed)
         self.normalize_button.clicked.connect(self._normalize_raw_document)
 
@@ -505,65 +458,6 @@ class MainWindow(QMainWindow):
         self.open_detached_preview_action.setChecked(False)
         self.open_detached_preview_action.blockSignals(False)
 
-    def _get_block_editor(self, block_index: int) -> QPlainTextEdit | None:
-        mapping = {
-            3: self.block3_editor,
-        }
-        return mapping.get(block_index)
-
-    def _format_image_markdown_path(self, image_path: Path) -> str:
-        base_dir = self.current_file.parent if self.current_file else self.current_directory
-        if base_dir:
-            try:
-                return image_path.relative_to(base_dir).as_posix()
-            except ValueError:
-                pass
-        return image_path.as_posix()
-
-    def _insert_image_with_text(self, block_index: int) -> None:
-        editor = self._get_block_editor(block_index)
-        if editor is None:
-            return
-
-        start_dir = self.current_directory or Path.home()
-        image_file, _ = QFileDialog.getOpenFileName(
-            self,
-            "Выберите картинку",
-            str(start_dir),
-            "Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.svg)",
-        )
-        if not image_file:
-            return
-
-        text_under_image, accepted = QInputDialog.getMultiLineText(
-            self,
-            "Текст под картинкой",
-            "Введите обязательный текст под изображением:",
-        )
-        if not accepted:
-            return
-
-        body_text = text_under_image.strip()
-        if not body_text:
-            QMessageBox.warning(
-                self,
-                "Нужен текст",
-                "После картинки должен быть текст. Вставка отменена.",
-            )
-            return
-
-        image_path = Path(image_file)
-        markdown_path = self._format_image_markdown_path(image_path)
-        alt_text = image_path.stem.strip() or "image"
-        snippet = f"![{alt_text}]({markdown_path})\n{body_text}\n"
-
-        cursor = editor.textCursor()
-        if cursor.position() > 0:
-            cursor.insertText("\n")
-        cursor.insertText(snippet)
-        editor.setTextCursor(cursor)
-        editor.setFocus()
-
     def _validate_image_text_rules(self, explicit: bool) -> bool:
         if not self._editor_in_structured_mode():
             return True
@@ -584,23 +478,12 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Проверьте блок 2", message)
             return False
 
-        checks = [
-            ("3. Описание сценариев сделок", self.block3_editor.toPlainText()),
-        ]
-        for block_title, block_text in checks:
-            bad_line = find_first_image_without_text(block_text)
-            if bad_line is None:
-                continue
-
-            message = (
-                f"В блоке '{block_title}' у изображения на строке {bad_line} "
-                "отсутствует обязательный текст под картинкой."
-            )
-            self._set_autosave_status("Автосохранение: добавьте текст под картинкой")
+        ok, message = self.deal_scenarios_editor.validate_content()
+        if not ok:
+            self._set_autosave_status("Автосохранение: заполните блок 3")
             self.statusBar().showMessage(message, 8000)
-
             if explicit:
-                QMessageBox.warning(self, "Проверьте изображения", message)
+                QMessageBox.warning(self, "Проверьте блок 3", message)
             return False
         return True
 
@@ -615,6 +498,14 @@ class MainWindow(QMainWindow):
             base_dir = self._current_preview_base_dir()
             self.current_situation_editor.set_base_directory(base_dir)
             self.transition_scenarios_editor.set_base_directory(base_dir)
+            self.deal_scenarios_editor.set_base_directory(base_dir)
+
+    def _sync_deal_transition_choices(self) -> None:
+        if not self._editor_in_structured_mode():
+            return
+        self.deal_scenarios_editor.set_transition_choices(
+            self.transition_scenarios_editor.scenario_choices()
+        )
 
     def _update_file_status_label(self) -> None:
         if self.current_file:
@@ -735,16 +626,19 @@ class MainWindow(QMainWindow):
             self.editor_stack.setCurrentWidget(self.structured_page)
             self.current_situation_editor.set_base_directory(self._current_preview_base_dir())
             self.transition_scenarios_editor.set_base_directory(self._current_preview_base_dir())
+            self.deal_scenarios_editor.set_base_directory(self._current_preview_base_dir())
             self.current_situation_editor.load_from_markdown(plan.block1)
             self.transition_scenarios_editor.load_from_markdown(plan.block2)
-            self.block3_editor.setPlainText(plan.block3)
+            self._sync_deal_transition_choices()
+            self.deal_scenarios_editor.load_from_markdown(plan.block3)
             self.raw_editor.setPlainText("")
         else:
             self.editor_stack.setCurrentWidget(self.raw_page)
             self.raw_editor.setPlainText(plan.raw_markdown)
             self.current_situation_editor.load_from_markdown("")
             self.transition_scenarios_editor.load_from_markdown("")
-            self.block3_editor.setPlainText("")
+            self.deal_scenarios_editor.set_transition_choices([])
+            self.deal_scenarios_editor.load_from_markdown("")
 
         self._updating = False
         self._update_preview()
@@ -801,7 +695,7 @@ class MainWindow(QMainWindow):
                 title=title,
                 block1=self.current_situation_editor.to_markdown(),
                 block2=self.transition_scenarios_editor.to_markdown(),
-                block3=self.block3_editor.toPlainText(),
+                block3=self.deal_scenarios_editor.to_markdown(),
                 extras=extras,
                 structured=True,
             )
@@ -849,6 +743,7 @@ class MainWindow(QMainWindow):
             base_dir = target_path.parent if target_path else self._current_preview_base_dir()
             self.current_situation_editor.set_base_directory(base_dir)
             self.transition_scenarios_editor.set_base_directory(base_dir)
+            self.deal_scenarios_editor.set_base_directory(base_dir)
         markdown, plan = self._compose_current_markdown()
 
         if not self._save_to_target(target=target_path, markdown=markdown, explicit=explicit):
