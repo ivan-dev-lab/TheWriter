@@ -68,6 +68,8 @@ def notation_to_text(notation: str) -> tuple[str | None, str | None]:
 
 
 class NotationTextEdit(QPlainTextEdit):
+    _ELEMENT_OPTIONS_NORMALIZED = {re.sub(r"\s+", " ", item).casefold() for item in ELEMENT_OPTIONS}
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._model = QStringListModel(self)
@@ -93,8 +95,17 @@ class NotationTextEdit(QPlainTextEdit):
 
         force_completion = event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Space
         super().keyPressEvent(event)
+        self._maybe_move_to_second_line()
         if force_completion or event.text() or event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete, Qt.Key.Key_Space):
             self._show_completions(force=force_completion)
+
+    def focusInEvent(self, event) -> None:  # type: ignore[override]
+        super().focusInEvent(event)
+        QTimer.singleShot(0, lambda: self._show_completions(force=True))
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        super().mousePressEvent(event)
+        QTimer.singleShot(0, lambda: self._show_completions(force=True))
 
     def _insert_completion(self, completion: str) -> None:
         cursor = self.textCursor()
@@ -105,14 +116,22 @@ class NotationTextEdit(QPlainTextEdit):
         while start > 0 and not line_text[start - 1].isspace():
             start -= 1
 
+        end = position_in_block
+        while end < len(line_text) and not line_text[end].isspace():
+            end += 1
+
         cursor.setPosition(cursor.position() - (position_in_block - start), QTextCursor.MoveMode.MoveAnchor)
         cursor.movePosition(
             QTextCursor.MoveOperation.Right,
             QTextCursor.MoveMode.KeepAnchor,
-            position_in_block - start,
+            end - start,
         )
-        cursor.insertText(completion)
+        insert_text = completion
+        if end >= len(line_text) or not line_text[end].isspace():
+            insert_text += " "
+        cursor.insertText(insert_text)
         self.setTextCursor(cursor)
+        self._maybe_move_to_second_line()
 
     def _show_completions(self, force: bool) -> None:
         suggestions, prefix = self._completion_context()
@@ -171,6 +190,48 @@ class NotationTextEdit(QPlainTextEdit):
                 return ["DR"], prefix
 
         return [], prefix
+
+    def _maybe_move_to_second_line(self) -> None:
+        cursor = self.textCursor()
+        if cursor.blockNumber() != 0:
+            return
+
+        first_line = self.document().findBlockByNumber(0).text()
+        if not self._is_first_line_complete(first_line):
+            return
+
+        second_block = self.document().findBlockByNumber(1)
+        if not second_block.isValid():
+            insert_cursor = QTextCursor(self.document())
+            insert_cursor.setPosition(self.document().findBlockByNumber(0).position() + len(first_line))
+            insert_cursor.insertText("\n")
+            second_block = self.document().findBlockByNumber(1)
+
+        if second_block.isValid() and second_block.text().strip():
+            return
+
+        if second_block.isValid():
+            cursor.setPosition(second_block.position())
+            self.setTextCursor(cursor)
+            QTimer.singleShot(0, lambda: self._show_completions(force=True))
+
+    @classmethod
+    def _is_first_line_complete(cls, line_text: str) -> bool:
+        tokens = line_text.strip().split()
+        if len(tokens) < 4:
+            return False
+        if tokens[0].upper() not in ("IN", "OUT"):
+            return False
+        if tokens[1] not in ("+", "-"):
+            return False
+        if tokens[2].upper() not in {value.upper() for value in TIMEFRAME_OPTIONS}:
+            return False
+
+        element_text = " ".join(tokens[3:]).strip()
+        if not element_text:
+            return False
+        normalized_element = re.sub(r"\s+", " ", element_text).casefold()
+        return len(tokens) == 4 or normalized_element in cls._ELEMENT_OPTIONS_NORMALIZED
 
 
 @dataclass(slots=True)

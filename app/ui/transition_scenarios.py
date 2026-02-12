@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
-from PySide6.QtCore import QStringListModel, Qt, Signal
+from PySide6.QtCore import QTimer, QStringListModel, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
     QCompleter,
     QFileDialog,
     QFrame,
@@ -243,6 +244,14 @@ class TransitionNotationEdit(QLineEdit):
         if force_completion or event.text() or event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete, Qt.Key.Key_Space):
             self._show_completions(force=force_completion)
 
+    def focusInEvent(self, event) -> None:  # type: ignore[override]
+        super().focusInEvent(event)
+        QTimer.singleShot(0, lambda: self._show_completions(force=True))
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        super().mousePressEvent(event)
+        QTimer.singleShot(0, lambda: self._show_completions(force=True))
+
     def _insert_completion(self, completion: str) -> None:
         text = self.text()
         cursor_pos = self.cursorPosition()
@@ -256,8 +265,12 @@ class TransitionNotationEdit(QLineEdit):
             end += 1
 
         updated = f"{text[:start]}{completion}{text[end:]}"
+        new_cursor = start + len(completion)
+        if new_cursor >= len(updated) or not updated[new_cursor].isspace():
+            updated = f"{updated[:new_cursor]} {updated[new_cursor:]}"
+            new_cursor += 1
         self.setText(updated)
-        self.setCursorPosition(start + len(completion))
+        self.setCursorPosition(new_cursor)
 
     def _show_completions(self, force: bool) -> None:
         suggestions, prefix = self._completion_context()
@@ -393,6 +406,14 @@ class TransitionMeaningNotationEdit(QLineEdit):
         if force_completion or event.text() or event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete, Qt.Key.Key_Space):
             self._show_completions(force=force_completion)
 
+    def focusInEvent(self, event) -> None:  # type: ignore[override]
+        super().focusInEvent(event)
+        QTimer.singleShot(0, lambda: self._show_completions(force=True))
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        super().mousePressEvent(event)
+        QTimer.singleShot(0, lambda: self._show_completions(force=True))
+
     def _insert_completion(self, completion: str) -> None:
         text = self.text()
         cursor_pos = self.cursorPosition()
@@ -406,8 +427,12 @@ class TransitionMeaningNotationEdit(QLineEdit):
             end += 1
 
         updated = f"{text[:start]}{completion}{text[end:]}"
+        new_cursor = start + len(completion)
+        if new_cursor >= len(updated) or not updated[new_cursor].isspace():
+            updated = f"{updated[:new_cursor]} {updated[new_cursor:]}"
+            new_cursor += 1
         self.setText(updated)
-        self.setCursorPosition(start + len(completion))
+        self.setCursorPosition(new_cursor)
 
     def _show_completions(self, force: bool) -> None:
         suggestions, prefix = self._completion_context()
@@ -507,6 +532,7 @@ class TransitionMeaningNotationEdit(QLineEdit):
 @dataclass(slots=True)
 class TransitionScenarioData:
     image_path: str
+    timeframe: str = ""
     notation: str = ""
     meaning_notation: str = ""
     why_text: str = ""
@@ -559,6 +585,15 @@ class TransitionScenarioWidget(QFrame):
         self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         root.addWidget(self.path_label)
 
+        tf_row = QHBoxLayout()
+        tf_row.addWidget(QLabel("Таймфрейм *"))
+        self.timeframe_combo = QComboBox()
+        self.timeframe_combo.addItem("Выберите TF", "")
+        for timeframe in TIMEFRAME_OPTIONS:
+            self.timeframe_combo.addItem(timeframe, timeframe)
+        tf_row.addWidget(self.timeframe_combo, 1)
+        root.addLayout(tf_row)
+
         root.addWidget(QLabel("Нотация *"))
         self.notation_edit = TransitionNotationEdit()
         root.addWidget(self.notation_edit)
@@ -589,6 +624,10 @@ class TransitionScenarioWidget(QFrame):
 
         self.image_path = data.image_path
         self.path_label.setText(data.image_path)
+        if data.timeframe:
+            index = self.timeframe_combo.findData(data.timeframe)
+            if index >= 0:
+                self.timeframe_combo.setCurrentIndex(index)
         self.notation_edit.setText(data.notation)
         self.meaning_notation_edit.setText(data.meaning_notation)
         self.manual_edit.setPlainText(data.why_text)
@@ -600,6 +639,7 @@ class TransitionScenarioWidget(QFrame):
         self.notation_edit.textChanged.connect(self._on_notation_changed)
         self.meaning_notation_edit.textChanged.connect(self._on_meaning_notation_changed)
         self.manual_edit.textChanged.connect(self.changed)
+        self.timeframe_combo.currentIndexChanged.connect(lambda _: self.changed.emit())
 
     def set_index(self, index: int) -> None:
         self.title_label.setText(f"Сценарий #{index}")
@@ -611,6 +651,7 @@ class TransitionScenarioWidget(QFrame):
     def to_data(self) -> TransitionScenarioData:
         return TransitionScenarioData(
             image_path=self.image_path,
+            timeframe=self.timeframe_combo.currentData() or "",
             notation=self.notation_edit.text().strip(),
             meaning_notation=self.meaning_notation_edit.text().strip(),
             why_text=self.manual_edit.toPlainText().strip(),
@@ -619,6 +660,8 @@ class TransitionScenarioWidget(QFrame):
     def validate(self) -> tuple[bool, str]:
         if not self.image_path.strip():
             return False, "Image is not selected."
+        if not self.timeframe_combo.currentData():
+            return False, "Выберите таймфрейм."
 
         notation_text = self.notation_edit.text().strip()
         generated, notation_error = transition_notation_to_text(notation_text)
@@ -657,6 +700,7 @@ class TransitionScenarioWidget(QFrame):
         parts = [
             f"#### Сценарий {index}",
             f"![{alt_text}]({image_markdown_path})",
+            f"**TF:** {data.timeframe}",
             "",
             "<!-- TRANSITION_NOTATION",
             data.notation.strip(),
@@ -948,6 +992,10 @@ class TransitionScenariosEditor(QWidget):
             chunk = text[start:end].strip()
 
             image_path = match.group(1).strip()
+            timeframe_match = re.search(r"(?mi)^\*\*TF:\*\*\s*(.+?)\s*$", chunk)
+            if not timeframe_match:
+                timeframe_match = re.search(r"(?mi)^TF:\s*(.+?)\s*$", chunk)
+            timeframe = timeframe_match.group(1).strip() if timeframe_match else ""
 
             notation_match = re.search(r"(?is)<!--\s*TRANSITION_NOTATION\s*(.*?)\s*-->", chunk)
             notation = notation_match.group(1).strip() if notation_match else ""
@@ -977,6 +1025,8 @@ class TransitionScenariosEditor(QWidget):
                 body_after_image = re.sub(r"(?is)<!--\s*TRANSITION_NOTATION\s*.*?-->", "", body_after_image).strip()
                 body_after_image = re.sub(r"(?is)<!--\s*TRANSITION_MEANING_NOTATION\s*.*?-->", "", body_after_image).strip()
                 body_after_image = re.sub(r"(?is)<!--\s*TRANSITION_WHY\s*.*?-->", "", body_after_image).strip()
+                body_after_image = re.sub(r"(?mi)^\*\*TF:\*\*\s*.*$", "", body_after_image).strip()
+                body_after_image = re.sub(r"(?mi)^TF:\s*.*$", "", body_after_image).strip()
                 body_after_image = re.sub(r"(?is)Notation:\s*\n.*$", "", body_after_image).strip()
                 body_after_image = re.sub(r"(?mi)^\*\*(?:What does this mean\?|Что это будет означать\?):\*\*\s*.*$", "", body_after_image).strip()
                 body_after_image = re.sub(r"(?mi)^\*\*(?:Why\?|Почему\?):\*\*\s*", "", body_after_image).strip()
@@ -988,6 +1038,7 @@ class TransitionScenariosEditor(QWidget):
             entries.append(
                 TransitionScenarioData(
                     image_path=image_path,
+                    timeframe=timeframe,
                     notation=notation,
                     meaning_notation=meaning_notation,
                     why_text=why_text,

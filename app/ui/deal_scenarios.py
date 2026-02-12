@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QLayout,
 )
 
+from .current_situation import TIMEFRAME_OPTIONS
+
 _IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
 _TRANSITION_REF_RE = re.compile(r"(?mi)^\*\*Сценарий перехода:\*\*\s*(.+?)\s*$")
 _FIELD_DEFINITIONS: list[tuple[str, str]] = [
@@ -80,6 +82,7 @@ class AutoHeightPlainTextEdit(QPlainTextEdit):
 @dataclass(slots=True)
 class DealScenarioData:
     image_path: str
+    timeframe: str = ""
     transition_ref: str = ""
     idea: str = ""
     entry: str = ""
@@ -134,6 +137,15 @@ class DealScenarioWidget(QFrame):
         self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         root.addWidget(self.path_label)
 
+        tf_row = QHBoxLayout()
+        tf_row.addWidget(QLabel("Таймфрейм *"))
+        self.timeframe_combo = QComboBox()
+        self.timeframe_combo.addItem("Выберите TF", "")
+        for timeframe in TIMEFRAME_OPTIONS:
+            self.timeframe_combo.addItem(timeframe, timeframe)
+        tf_row.addWidget(self.timeframe_combo, 1)
+        root.addLayout(tf_row)
+
         transition_row = QHBoxLayout()
         transition_row.addWidget(QLabel("Сценарий перехода *"))
         self.transition_combo = QComboBox()
@@ -157,6 +169,10 @@ class DealScenarioWidget(QFrame):
 
         self.image_path = data.image_path
         self.path_label.setText(data.image_path)
+        if data.timeframe:
+            index = self.timeframe_combo.findData(data.timeframe)
+            if index >= 0:
+                self.timeframe_combo.setCurrentIndex(index)
         self.idea_edit.setPlainText(data.idea)
         self.entry_edit.setPlainText(data.entry)
         self.sl_edit.setPlainText(data.sl)
@@ -166,6 +182,7 @@ class DealScenarioWidget(QFrame):
         self._update_image_preview()
 
         self.transition_combo.currentIndexChanged.connect(self._on_transition_changed)
+        self.timeframe_combo.currentIndexChanged.connect(lambda _: self.changed.emit())
         self.idea_edit.textChanged.connect(self.changed)
         self.entry_edit.textChanged.connect(self.changed)
         self.sl_edit.textChanged.connect(self.changed)
@@ -205,6 +222,7 @@ class DealScenarioWidget(QFrame):
         transition_ref = self.transition_combo.currentData() or self._transition_ref
         return DealScenarioData(
             image_path=self.image_path,
+            timeframe=self.timeframe_combo.currentData() or "",
             transition_ref=(transition_ref or "").strip(),
             idea=self.idea_edit.toPlainText().strip(),
             entry=self.entry_edit.toPlainText().strip(),
@@ -216,6 +234,8 @@ class DealScenarioWidget(QFrame):
         data = self.to_data()
         if not data.image_path.strip():
             return False, "Не выбрана картинка."
+        if not data.timeframe.strip():
+            return False, "Выберите таймфрейм."
         if not data.transition_ref.strip():
             return False, "Выберите сценарий перехода."
         if not data.idea.strip():
@@ -236,6 +256,7 @@ class DealScenarioWidget(QFrame):
         parts = [
             f"#### Сделка {index}",
             f"![{alt_text}]({image_markdown_path})",
+            f"**TF:** {data.timeframe}",
             f"**Сценарий перехода:** {data.transition_ref}",
             "",
             f"**{_FIELD_DEFINITIONS[0][1]}**",
@@ -457,11 +478,17 @@ class DealScenariosEditor(QWidget):
             chunk = text[start:end].strip()
 
             image_path = match.group(1).strip()
+            timeframe_match = re.search(r"(?mi)^\*\*TF:\*\*\s*(.+?)\s*$", chunk)
+            if not timeframe_match:
+                timeframe_match = re.search(r"(?mi)^TF:\s*(.+?)\s*$", chunk)
+            timeframe = timeframe_match.group(1).strip() if timeframe_match else ""
             transition_match = _TRANSITION_REF_RE.search(chunk)
             transition_ref = transition_match.group(1).strip() if transition_match else ""
             fields = _extract_fields_by_headers(chunk)
             if all(not value for value in fields.values()):
                 body_after_image = chunk[match.end() - start :].strip()
+                body_after_image = re.sub(r"(?mi)^\*\*TF:\*\*.*$", "", body_after_image).strip()
+                body_after_image = re.sub(r"(?mi)^TF:\s*.*$", "", body_after_image).strip()
                 body_after_image = re.sub(
                     r"(?mi)^\*\*Сценарий перехода:\*\*.*$",
                     "",
@@ -472,6 +499,7 @@ class DealScenariosEditor(QWidget):
             entries.append(
                 DealScenarioData(
                     image_path=image_path,
+                    timeframe=timeframe,
                     transition_ref=transition_ref,
                     idea=fields["idea"],
                     entry=fields["entry"],

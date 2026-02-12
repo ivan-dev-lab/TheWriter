@@ -91,6 +91,7 @@ def test_transition_meaning_notation_invalid() -> None:
 def test_parse_transition_scenarios_with_new_comments() -> None:
     markdown = """#### Сценарий 1
 ![scenario_1](img.png)
+**TF:** H1
 
 <!-- TRANSITION_NOTATION
 CREATE + H1 OB
@@ -108,6 +109,7 @@ Because liquidity remains above the prior high.
     assert len(entries) == 1
     entry = entries[0]
     assert entry.image_path == "img.png"
+    assert entry.timeframe == "H1"
     assert entry.notation == "CREATE + H1 OB"
     assert entry.meaning_notation == "ADV BUY UP + H1 OB"
     assert entry.why_text == "Because liquidity remains above the prior high."

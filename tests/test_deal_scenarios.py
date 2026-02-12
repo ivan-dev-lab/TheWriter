@@ -4,6 +4,7 @@ from app.ui.deal_scenarios import DealScenariosEditor
 def test_parse_deal_scenarios_markdown() -> None:
     markdown = """#### Сделка 1
 ![deal_1](img1.png)
+**TF:** M15
 **Сценарий перехода:** GET + H1 OB ACTUAL - H4 DR Premium
 
 **Идея сделки**
@@ -23,6 +24,7 @@ TP rationale
     assert len(entries) == 1
     entry = entries[0]
     assert entry.image_path == "img1.png"
+    assert entry.timeframe == "M15"
     assert entry.transition_ref == "GET + H1 OB ACTUAL - H4 DR Premium"
     assert entry.idea == "Идея"
     assert entry.entry == "Entry rationale"
@@ -31,11 +33,12 @@ TP rationale
 
 
 def test_parse_deal_scenarios_without_sections() -> None:
-    markdown = "![deal](img.png)\nТекст без заголовков"
+    markdown = "![deal](img.png)\n**TF:** H1\nТекст без заголовков"
     entries = DealScenariosEditor._parse_entries(markdown)
     assert len(entries) == 1
     entry = entries[0]
     assert entry.image_path == "img.png"
+    assert entry.timeframe == "H1"
     assert entry.transition_ref == ""
     assert entry.idea == "Текст без заголовков"
     assert entry.entry == ""
