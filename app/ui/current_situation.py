@@ -23,14 +23,11 @@ from PySide6.QtWidgets import (
 
 TIMEFRAME_OPTIONS = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"]
 ELEMENT_OPTIONS = [
-    "OB",
+    "RB",
     "FVG",
-    "BOS",
-    "CHOCH",
-    "Liquidity",
-    "Range High",
-    "Range Low",
-    "POI",
+    "SNR",
+    "FL",
+    "FH",
 ]
 
 _LINE_1_RE = re.compile(r"^(IN|OUT)\s+([+-])\s+([A-Za-z0-9]+)\s+(.+)$", re.IGNORECASE)
