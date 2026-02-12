@@ -68,6 +68,33 @@ def test_transition_notation_not_create_with_clause_success() -> None:
     assert "Discount" in text
 
 
+def test_transition_notation_create_with_clause_break_success() -> None:
+    notation = "CREATE + M5 FVG WITH - H1 OB PREV + D1 DR Discount BREAK"
+    text, error = transition_notation_to_text(notation)
+    assert error is None
+    assert text is not None
+    assert "с пробитием" in text
+    assert "[-H1 OB]" in text
+    assert "[+D1 DR]" in text
+
+
+def test_transition_notation_create_with_clause_not_break_success() -> None:
+    notation = "CREATE + M5 FVG WITH - H1 OB PREV + D1 DR Discount NOT BREAK"
+    text, error = transition_notation_to_text(notation)
+    assert error is None
+    assert text is not None
+    assert "после реакции на" in text
+    assert "[-H1 OB]" in text
+
+
+def test_transition_notation_create_with_clause_requires_break_mode() -> None:
+    notation = "CREATE + M5 FVG WITH - H1 OB PREV + D1 DR Discount"
+    text, error = transition_notation_to_text(notation)
+    assert text is None
+    assert error is not None
+    assert "BREAK" in error
+
+
 def test_transition_action_from_notation_detects_action_early() -> None:
     assert transition_action_from_notation("CREATE") == "CREATE"
     assert transition_action_from_notation("NOT CREATE + H1 OB") == "NOT CREATE"

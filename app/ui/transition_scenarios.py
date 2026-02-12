@@ -39,7 +39,7 @@ _MEANING_ELEMENT_RE = re.compile(
 )
 _ACTION_HELP = (
     "CREATE +/- TF Element [ACTUAL/PREV +/- TF DR Premium/Discount/Equilibrium] "
-    "[WITH +/- TF Element ACTUAL/PREV +/- TF DR Premium/Discount/Equilibrium] "
+    "[WITH +/- TF Element ACTUAL/PREV +/- TF DR Premium/Discount/Equilibrium BREAK/NOT BREAK] "
     "или NOT CREATE +/- TF Element "
     "[WITH +/- TF Element ACTUAL/PREV +/- TF DR Premium/Discount/Equilibrium] "
     "или GET/NOT GET +/- TF Element ACTUAL/PREV +/- TF DR Premium/Discount/Equilibrium"
@@ -128,7 +128,7 @@ def transition_meaning_notation_to_text(notation: str) -> tuple[str | None, str 
         zone = _normalize_zone(zone_raw)
         return (
             (
-                "Данное ценообразование будет означать "
+                "Такое ценообразование будет означать "
                 f"{advantage_text} {side_text} {level_text} "
                 f"отметок {zone} {range_kind_text} {range_desc}."
             ),
@@ -247,6 +247,7 @@ def transition_notation_to_text(notation: str) -> tuple[str | None, str | None]:
     primary_range: tuple[str, str, str, str] | None = None
     with_element: tuple[str, str, str] | None = None
     with_range: tuple[str, str, str, str] | None = None
+    with_mode: str | None = None
 
     if action == "CREATE" and index < len(tokens) and tokens[index].upper() in ("ACTUAL", "PREV"):
         primary_range, index, error = parse_range(index)
@@ -266,6 +267,21 @@ def transition_notation_to_text(notation: str) -> tuple[str | None, str | None]:
         with_range, index, error = parse_range(index)
         if error:
             return None, error
+        if action == "CREATE":
+            if index >= len(tokens):
+                return None, "После WITH блока для CREATE укажите BREAK или NOT BREAK."
+            marker = tokens[index].upper()
+            if marker == "BREAK":
+                with_mode = "BREAK"
+                index += 1
+            elif marker == "NOT_BREAK":
+                with_mode = "NOT BREAK"
+                index += 1
+            elif marker == "NOT" and index + 1 < len(tokens) and tokens[index + 1].upper() == "BREAK":
+                with_mode = "NOT BREAK"
+                index += 2
+            else:
+                return None, "После WITH блока для CREATE допускаются только BREAK или NOT BREAK."
 
     if index != len(tokens):
         return None, f"Формат нотации: {_ACTION_HELP}"
@@ -280,14 +296,19 @@ def transition_notation_to_text(notation: str) -> tuple[str | None, str | None]:
             f"{_dr_desc(primary_range[1], primary_range[2])}"
         )
     if with_element and with_range:
-        details.append(
-            "в ходе взаимодействия с "
-            f"{_element_desc(*with_element)}, расположенный в отметках {with_range[3]} "
+        with_description = (
+            f"{_element_desc(*with_element)}, расположенного в отметках {with_range[3]} "
             f"{_range_kind_text(with_range[0])} {_dr_desc(with_range[1], with_range[2])}"
         )
+        if action == "CREATE" and with_mode == "BREAK":
+            details.append(f"с пробитием {with_description}")
+        elif action == "CREATE" and with_mode == "NOT BREAK":
+            details.append(f"после реакции на {with_description}")
+        else:
+            details.append(f"в ходе взаимодействия с {with_description}")
 
     if details:
-        return f"{text}, {'; '.join(details)}.", None
+        return f"{text}, {' '.join(details)}.", None
     return f"{text}.", None
 
 
@@ -429,7 +450,7 @@ class TransitionNotationEdit(QLineEdit):
                 return ["WITH"]
             if tokens[index].upper() != "WITH":
                 return ["WITH"]
-            return self._with_suggestions(tokens, index)
+            return self._with_suggestions(tokens, index, require_break=False)
 
         if len(tokens) == index:
             return ["ACTUAL", "PREV", "WITH"]
@@ -444,10 +465,10 @@ class TransitionNotationEdit(QLineEdit):
                 return ["WITH"]
             if tokens[index].upper() != "WITH":
                 return ["WITH"]
-            return self._with_suggestions(tokens, index)
+            return self._with_suggestions(tokens, index, require_break=True)
 
         if head == "WITH":
-            return self._with_suggestions(tokens, index)
+            return self._with_suggestions(tokens, index, require_break=True)
 
         return ["ACTUAL", "PREV", "WITH"]
 
@@ -464,7 +485,7 @@ class TransitionNotationEdit(QLineEdit):
             return self._ZONE_OPTIONS
         return []
 
-    def _with_suggestions(self, tokens: list[str], with_index: int) -> list[str]:
+    def _with_suggestions(self, tokens: list[str], with_index: int, require_break: bool) -> list[str]:
         if len(tokens) == with_index:
             return ["WITH"]
         if tokens[with_index].upper() != "WITH":
@@ -487,6 +508,10 @@ class TransitionNotationEdit(QLineEdit):
             return ["DR"]
         if len(tokens) == start + 7:
             return self._ZONE_OPTIONS
+        if require_break and len(tokens) == start + 8:
+            return ["BREAK", "NOT BREAK"]
+        if require_break and len(tokens) == start + 9 and tokens[start + 8].upper() == "NOT":
+            return ["BREAK"]
         return []
 
     def focusOutEvent(self, event) -> None:  # type: ignore[override]
