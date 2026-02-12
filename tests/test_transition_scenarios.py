@@ -10,14 +10,14 @@ def test_transition_notation_create_success() -> None:
     text, error = transition_notation_to_text("CREATE + H1 OB")
     assert error is None
     assert text is not None
-    assert "H1 OB" in text
+    assert "[+H1 OB]" in text
 
 
 def test_transition_notation_not_create_success() -> None:
     text, error = transition_notation_to_text("NOT CREATE - M15 FVG")
     assert error is None
     assert text is not None
-    assert "M15 FVG" in text
+    assert "[-M15 FVG]" in text
 
 
 def test_transition_notation_get_success() -> None:
@@ -25,8 +25,8 @@ def test_transition_notation_get_success() -> None:
     text, error = transition_notation_to_text(notation)
     assert error is None
     assert text is not None
-    assert "H1 OB" in text
-    assert "H4" in text
+    assert "[+H1 OB]" in text
+    assert "[-H4 DR]" in text
     assert "Premium" in text
 
 
@@ -35,8 +35,8 @@ def test_transition_notation_not_get_with_underscore_success() -> None:
     text, error = transition_notation_to_text(notation)
     assert error is None
     assert text is not None
-    assert "M30 FVG" in text
-    assert "D1" in text
+    assert "[-M30 FVG]" in text
+    assert "[+D1 DR]" in text
     assert "Equilibrium" in text
 
 
@@ -68,8 +68,7 @@ def test_transition_meaning_notation_element_success() -> None:
     text, error = transition_meaning_notation_to_text(notation)
     assert error is None
     assert text is not None
-    assert "H1 OB" in text
-    assert "OB" in text
+    assert "[+H1 OB]" in text
 
 
 def test_transition_meaning_notation_dr_success() -> None:
@@ -77,7 +76,7 @@ def test_transition_meaning_notation_dr_success() -> None:
     text, error = transition_meaning_notation_to_text(notation)
     assert error is None
     assert text is not None
-    assert "M15" in text
+    assert "[-M15 DR]" in text
     assert "Discount" in text
 
 

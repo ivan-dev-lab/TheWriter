@@ -126,16 +126,13 @@ def transition_meaning_notation_to_text(notation: str) -> tuple[str | None, str 
             if range_kind_raw.upper() == "ACTUAL"
             else "предыдущего"
         )
-        range_direction_text = (
-            "восходящего" if range_sign == "+" else "нисходящего"
-        )
+        range_desc = f"[{range_sign}{range_tf.upper()} DR]"
         zone = _normalize_zone(zone_raw)
         return (
             (
                 "Данное ценообразование будет означать "
                 f"{advantage_text} {side_text} {level_text} "
-                f"{range_kind_text} {range_direction_text} торгового диапазона "
-                f"на {range_tf.upper()} в отметках {zone}."
+                f"{range_kind_text} {range_desc} в отметках {zone}."
             ),
             None,
         )
@@ -143,12 +140,12 @@ def transition_meaning_notation_to_text(notation: str) -> tuple[str | None, str 
     element_match = _MEANING_ELEMENT_RE.match(tail)
     if element_match:
         element_sign, element_tf, element_name = element_match.groups()
-        direction_text = "восходящего" if element_sign == "+" else "нисходящего"
+        element_desc = f"[{element_sign}{element_tf.upper()} {element_name.strip()}]"
         return (
             (
                 "Данное ценообразование будет означать "
                 f"{advantage_text} {side_text} {level_text} "
-                f"{direction_text} {element_tf.upper()} {element_name.strip()}."
+                f"{element_desc}."
             ),
             None,
         )
@@ -173,10 +170,10 @@ def transition_notation_to_text(notation: str) -> tuple[str | None, str | None]:
             return None, "Для CREATE/NOT CREATE указывается только +/- TF Element без блока ACTUAL/PREV ... DR ..."
         action = _normalize_action(action_raw)
         action_text = "сформировать" if action == "CREATE" else "не сформировать"
-        side_text = "бычий" if sign == "+" else "медвежий"
+        element_desc = f"[{sign}{timeframe.upper()} {element.strip()}]"
         text = (
             "Для перехода к сделке цена должна "
-            f"{action_text} {side_text} {timeframe.upper()} {element.strip()}."
+            f"{action_text} {element_desc}."
         )
         return text, None
 
@@ -194,15 +191,14 @@ def transition_notation_to_text(notation: str) -> tuple[str | None, str | None]:
         ) = get_match.groups()
         action = _normalize_action(action_raw)
         action_text = "получить" if action == "GET" else "не получить"
-        side_text = "бычьего" if sign == "+" else "медвежьего"
-        range_kind_text = "актуальном" if range_kind_raw.upper() == "ACTUAL" else "предыдущем"
-        range_sign_text = "бычьем" if range_sign == "+" else "медвежьем"
+        element_desc = f"[{sign}{timeframe.upper()} {element.strip()}]"
+        range_kind_text = "актуального" if range_kind_raw.upper() == "ACTUAL" else "предыдущего"
+        range_desc = f"[{range_sign}{range_tf.upper()} DR]"
         zone = _normalize_zone(zone_raw)
         text = (
             "Для перехода к сделке цена должна "
-            f"{action_text} реакцию от {side_text} {timeframe.upper()} {element.strip()}, "
-            f"расположенного в {range_kind_text} {range_sign_text} торговом диапазоне на "
-            f"{range_tf.upper()} в отметке {zone}."
+            f"{action_text} реакцию от {element_desc}, "
+            f"расположенного в отметке {zone} {range_kind_text} {range_desc}."
         )
         return text, None
 

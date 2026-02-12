@@ -52,11 +52,14 @@ def notation_to_text(notation: str) -> tuple[str | None, str | None]:
     if len(lines) != 2:
         return None, "Нотация должна содержать ровно 2 непустые строки."
 
-    def sign_text(sign: str) -> str:
-        return "бычьего" if sign == "+" else "медвежьего"
-
     def actual_prev_text(value: str) -> str:
         return "актуального" if value.upper() == "ACTUAL" else "предыдущего"
+
+    def element_text(sign: str, timeframe: str, element: str) -> str:
+        return f"[{sign}{timeframe.upper()} {element}]"
+
+    def dr_text(sign: str, timeframe: str) -> str:
+        return f"[{sign}{timeframe.upper()} DR]"
 
     def normalize_zone(value: str) -> str:
         lookup = {"premium": "Premium", "equilibrium": "Equilibrium", "discount": "Discount"}
@@ -85,18 +88,18 @@ def notation_to_text(notation: str) -> tuple[str | None, str | None]:
             return None, "2 строка: Actual/Prev +/- TF DR Premium/Equilibrium/Discount"
         assert clause_data is not None
         actual_prev, sign_2, tf_2, zone = clause_data
-        element_desc = f"{sign_text(sign_1)} {tf_1.upper()} {element}"
+        range_desc = dr_text(sign_2, tf_2)
         text = (
-            f"Цена находится внутри {element_desc}. "
+            f"Цена находится внутри {element_text(sign_1, tf_1, element)}. "
             f"Данный {element} находится в отметках {zone} {actual_prev_text(actual_prev)} "
-            f"{sign_text(sign_2)} торгового диапазона на {tf_2} TF."
+            f"{range_desc}."
         )
         return text, None
 
     range_two_match = _LINE_1_RANGE_TWO_RE.match(line_1)
     if range_two_match:
         sign_1, tf_1, element_1, sign_2, tf_2, element_2 = range_two_match.groups()
-        first_element_desc = f"{sign_text(sign_1)} {tf_1.upper()} {element_1}"
+        first_element_desc = element_text(sign_1, tf_1, element_1)
         parts = [part.strip() for part in re.split(r"\s*[|;]\s*", line_2) if part.strip()]
         if len(parts) != 2:
             return None, "2 строка для RANGE с 2 элементами: <диапазон 1> | <диапазон 2>"
@@ -107,13 +110,9 @@ def notation_to_text(notation: str) -> tuple[str | None, str | None]:
             return None, "2 строка для RANGE: Actual/Prev +/- TF DR Premium/Equilibrium/Discount | Actual/Prev +/- TF DR Premium/Equilibrium/Discount"
         assert clause_1 is not None and clause_2 is not None
 
-        range_1_text = (
-            f"{clause_1[3]} {actual_prev_text(clause_1[0])} {sign_text(clause_1[1])} торгового диапазона на {clause_1[2]} TF"
-        )
-        range_2_text = (
-            f"{clause_2[3]} {actual_prev_text(clause_2[0])} {sign_text(clause_2[1])} торгового диапазона на {clause_2[2]} TF"
-        )
-        second_element_desc = f"{sign_text(sign_2)} {tf_2.upper()} {element_2}"
+        range_1_text = f"{clause_1[3]} {actual_prev_text(clause_1[0])} {dr_text(clause_1[1], clause_1[2])}"
+        range_2_text = f"{clause_2[3]} {actual_prev_text(clause_2[0])} {dr_text(clause_2[1], clause_2[2])}"
+        second_element_desc = element_text(sign_2, tf_2, element_2)
         text = (
             f"Цена находится в диапазоне между {first_element_desc}, расположенного в отметках {range_1_text}, "
             f"и {second_element_desc}, расположенного в отметках {range_2_text}."
@@ -125,19 +124,16 @@ def notation_to_text(notation: str) -> tuple[str | None, str | None]:
         return None, "1 строка: IN +/- TF Element или RANGE +/- TF Element (UP/DOWN или +/- TF Element)"
 
     sign_1, tf_1, element_1, direction = range_one_match.groups()
-    first_element_desc = f"{sign_text(sign_1)} {tf_1.upper()} {element_1}"
     clause_data, clause_error = parse_range_clause(line_2)
     if clause_error:
         return None, "2 строка для RANGE с 1 элементом: Actual/Prev +/- TF DR Premium/Equilibrium/Discount"
     assert clause_data is not None
 
     ath_or_atl = "ATH" if direction.upper() == "UP" else "ATL"
-    range_text = (
-        f"{clause_data[3]} {actual_prev_text(clause_data[0])} {sign_text(clause_data[1])} торгового диапазона на {clause_data[2]} TF"
-    )
+    range_text = f"{clause_data[3]} {actual_prev_text(clause_data[0])} {dr_text(clause_data[1], clause_data[2])}"
     text = (
         f"Цена устанавливает {ath_or_atl}. "
-        f"Ближайшая опорная область - {first_element_desc}, расположенный в отметках {range_text}."
+        f"Ближайшая опорная область - {element_text(sign_1, tf_1, element_1)}, расположенный в отметках {range_text}."
     )
     return text, None
 

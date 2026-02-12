@@ -7,8 +7,8 @@ def test_notation_to_text_in_success() -> None:
     assert error is None
     assert text is not None
     assert "внутри" in text
-    assert "бычьего H1 RB" in text
-    assert "в отметках Premium актуального медвежьего торгового диапазона на H1 TF" in text
+    assert "[+H1 RB]" in text
+    assert "в отметках Premium актуального [-H1 DR]" in text
 
 
 def test_notation_to_text_range_two_elements_success() -> None:
@@ -17,10 +17,10 @@ def test_notation_to_text_range_two_elements_success() -> None:
     assert error is None
     assert text is not None
     assert "в диапазоне между" in text
-    assert "бычьего H1 RB" in text
-    assert "медвежьего H4 FVG" in text
-    assert "Premium актуального бычьего торгового диапазона на H1 TF" in text
-    assert "Discount предыдущего медвежьего торгового диапазона на H4 TF" in text
+    assert "[+H1 RB]" in text
+    assert "[-H4 FVG]" in text
+    assert "Premium актуального [+H1 DR]" in text
+    assert "Discount предыдущего [-H4 DR]" in text
 
 
 def test_notation_to_text_range_one_element_success() -> None:
@@ -29,8 +29,8 @@ def test_notation_to_text_range_one_element_success() -> None:
     assert error is None
     assert text is not None
     assert "Цена устанавливает ATL." in text
-    assert "Ближайшая опорная область - бычьего H1 RB" in text
-    assert "Equilibrium предыдущего медвежьего торгового диапазона на H4 TF" in text
+    assert "Ближайшая опорная область - [+H1 RB]" in text
+    assert "Equilibrium предыдущего [-H4 DR]" in text
 
 
 def test_notation_to_text_wrong_first_line() -> None:
