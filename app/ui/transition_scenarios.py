@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
-from PySide6.QtCore import QTimer, QStringListModel, Qt, Signal
+from PySide6.QtCore import QStringListModel, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCompleter,
@@ -39,7 +39,24 @@ _GET_TAIL_RE = re.compile(
     r"\b(ACTUAL|PREV)\b\s+[+-]\s+[A-Za-z0-9]+\s+DR\s+(PREMIUM|DISCOUNT|EQUILIBRIUM)\s*$",
     re.IGNORECASE,
 )
+_MEANING_RE = re.compile(
+    r"^(ADV|NOT[\s_]+ADV)\s+(BUY|SELL)\s+(UP|LOW)\s+(.+)$",
+    re.IGNORECASE,
+)
+_MEANING_RANGE_RE = re.compile(
+    r"^(ACTUAL|PREV)\s+([+-])\s+([A-Za-z0-9]+)\s+DR\s+(PREMIUM|DISCOUNT|EQUILIBRIUM)$",
+    re.IGNORECASE,
+)
+_MEANING_ELEMENT_RE = re.compile(
+    r"^([+-])\s+([A-Za-z0-9]+)\s+(.+)$",
+    re.IGNORECASE,
+)
 _ACTION_HELP = "CREATE/NOT CREATE [+/- TF Element] или GET/NOT GET [+/- TF Element ACTUAL/PREV +/- TF DR Premium/Discount/Equilibrium]"
+
+
+_MEANING_HELP = (
+    "ADV/NOT ADV BUY/SELL UP/LOW (+/- TF Element | ACTUAL/PREV +/- TF DR Premium/Discount/Equilibrium)"
+)
 
 
 def _normalize_action(value: str) -> str:
@@ -54,6 +71,91 @@ def _normalize_zone(value: str) -> str:
         "equilibrium": "Equilibrium",
     }
     return mapping.get(zone, value.strip())
+
+
+def transition_action_from_notation(notation: str) -> str | None:
+    lines = [line.strip() for line in notation.splitlines() if line.strip()]
+    if len(lines) != 1:
+        return None
+
+    normalized = _normalize_action(lines[0])
+    if normalized.startswith("NOT CREATE"):
+        return "NOT CREATE"
+    if normalized.startswith("CREATE"):
+        return "CREATE"
+    if normalized.startswith("NOT GET"):
+        return "NOT GET"
+    if normalized.startswith("GET"):
+        return "GET"
+    return None
+
+
+def transition_meaning_notation_to_text(notation: str) -> tuple[str | None, str | None]:
+    lines = [line.strip() for line in notation.splitlines() if line.strip()]
+    if len(lines) != 1:
+        return None, "Notation must contain exactly one non-empty line."
+
+    line = lines[0]
+    meaning_match = _MEANING_RE.match(line)
+    if not meaning_match:
+        return None, f"Notation format: {_MEANING_HELP}"
+
+    advantage_raw, side_raw, level_raw, tail = meaning_match.groups()
+    advantage = _normalize_action(advantage_raw)
+    side = side_raw.upper()
+    level = level_raw.upper()
+
+    advantage_text = (
+        "преимущество"
+        if advantage == "ADV"
+        else "отсутствие преимущества"
+    )
+    side_text = (
+        "покупателей над продавцами"
+        if side == "BUY"
+        else "продавцов над покупателями"
+    )
+    level_text = "выше" if level == "UP" else "ниже"
+
+    range_match = _MEANING_RANGE_RE.match(tail)
+    if range_match:
+        range_kind_raw, range_sign, range_tf, zone_raw = range_match.groups()
+        range_kind_text = (
+            "актуального"
+            if range_kind_raw.upper() == "ACTUAL"
+            else "предыдущего"
+        )
+        range_direction_text = (
+            "восходящего" if range_sign == "+" else "нисходящего"
+        )
+        zone = _normalize_zone(zone_raw)
+        return (
+            (
+                "Данное ценообразование будет означать "
+                f"{advantage_text} {side_text} {level_text} "
+                f"{range_kind_text} {range_direction_text} торгового диапазона "
+                f"на {range_tf.upper()} в отметках {zone}."
+            ),
+            None,
+        )
+
+    element_match = _MEANING_ELEMENT_RE.match(tail)
+    if element_match:
+        element_sign, element_tf, element_name = element_match.groups()
+        direction_text = "восходящего" if element_sign == "+" else "нисходящего"
+        return (
+            (
+                "Данное ценообразование будет означать "
+                f"{advantage_text} {side_text} {level_text} "
+                f"{direction_text} {element_tf.upper()} {element_name.strip()}."
+            ),
+            None,
+        )
+
+    return None, (
+        "After ADV/NOT ADV BUY/SELL UP/LOW specify either +/- TF Element "
+        "or ACTUAL/PREV +/- TF DR Premium/Discount/Equilibrium."
+    )
 
 
 def transition_notation_to_text(notation: str) -> tuple[str | None, str | None]:
@@ -254,11 +356,160 @@ class TransitionNotationEdit(QLineEdit):
         super().focusOutEvent(event)
 
 
+class TransitionMeaningNotationEdit(QLineEdit):
+    _ACTION_FIRST_OPTIONS = ["ADV", "NOT"]
+    _ACTION_AFTER_NOT_OPTIONS = ["ADV"]
+    _SIDE_OPTIONS = ["BUY", "SELL"]
+    _LEVEL_OPTIONS = ["UP", "LOW"]
+    _RANGE_KIND_OPTIONS = ["ACTUAL", "PREV"]
+    _ZONE_OPTIONS = ["Premium", "Discount", "Equilibrium"]
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setPlaceholderText("ADV/NOT ADV BUY/SELL UP/LOW ...")
+        self._model = QStringListModel(self)
+        self._completer = QCompleter(self._model, self)
+        self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self._completer.setWidget(self)
+        self._completer.activated.connect(self._insert_completion)
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        popup = self._completer.popup()
+        if popup.isVisible() and event.key() in (
+            Qt.Key.Key_Enter,
+            Qt.Key.Key_Return,
+            Qt.Key.Key_Escape,
+            Qt.Key.Key_Tab,
+            Qt.Key.Key_Backtab,
+        ):
+            event.ignore()
+            return
+
+        force_completion = (
+            event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Space
+        )
+        super().keyPressEvent(event)
+        if force_completion or event.text() or event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete, Qt.Key.Key_Space):
+            self._show_completions(force=force_completion)
+
+    def _insert_completion(self, completion: str) -> None:
+        text = self.text()
+        cursor_pos = self.cursorPosition()
+
+        start = cursor_pos
+        while start > 0 and not text[start - 1].isspace():
+            start -= 1
+
+        end = cursor_pos
+        while end < len(text) and not text[end].isspace():
+            end += 1
+
+        updated = f"{text[:start]}{completion}{text[end:]}"
+        self.setText(updated)
+        self.setCursorPosition(start + len(completion))
+
+    def _show_completions(self, force: bool) -> None:
+        suggestions, prefix = self._completion_context()
+        if not suggestions:
+            self._completer.popup().hide()
+            return
+
+        if prefix:
+            suggestions = [item for item in suggestions if item.casefold().startswith(prefix.casefold())]
+            if not suggestions:
+                self._completer.popup().hide()
+                return
+        elif not force:
+            cursor = self.cursorPosition()
+            if cursor > 0 and not self.text()[cursor - 1].isspace():
+                return
+
+        self._model.setStringList(suggestions)
+        self._completer.setCompletionPrefix(prefix)
+        popup = self._completer.popup()
+        popup.setCurrentIndex(self._completer.completionModel().index(0, 0))
+        rect = self.cursorRect()
+        rect.setWidth(max(360, popup.sizeHintForColumn(0) + 24))
+        self._completer.complete(rect)
+
+    def _completion_context(self) -> tuple[list[str], str]:
+        before = self.text()[: self.cursorPosition()]
+        tokens = re.split(r"\s+", before.strip()) if before.strip() else []
+
+        if before and not before.endswith((" ", "\t")):
+            prefix = tokens[-1] if tokens else ""
+            token_index = len(tokens) - 1
+        else:
+            prefix = ""
+            token_index = len(tokens)
+
+        if token_index <= 0:
+            return self._ACTION_FIRST_OPTIONS, prefix
+
+        first = tokens[0].upper() if tokens else ""
+        if first == "NOT":
+            if token_index == 1:
+                return self._ACTION_AFTER_NOT_OPTIONS, prefix
+            action_kind = tokens[1].upper() if len(tokens) > 1 else ""
+            if action_kind != "ADV":
+                return self._ACTION_AFTER_NOT_OPTIONS, prefix
+            action_offset = 2
+        elif first == "ADV":
+            action_offset = 1
+        else:
+            return self._ACTION_FIRST_OPTIONS, prefix
+
+        if token_index == action_offset:
+            return self._SIDE_OPTIONS, prefix
+        if token_index == action_offset + 1:
+            return self._LEVEL_OPTIONS, prefix
+        if token_index == action_offset + 2:
+            return ["ACTUAL", "PREV"], prefix
+
+        tail_start = action_offset + 2
+        tail_tokens = tokens[tail_start:] if len(tokens) > tail_start else []
+        if not tail_tokens:
+            return ["ACTUAL", "PREV"], prefix
+
+        first_tail = tail_tokens[0].upper()
+        if first_tail in ("ACTUAL", "PREV"):
+            relative_index = token_index - tail_start
+            if relative_index <= 0:
+                return self._RANGE_KIND_OPTIONS, prefix
+            if relative_index == 1:
+                return ["+", "-"], prefix
+            if relative_index == 2:
+                return TIMEFRAME_OPTIONS, prefix
+            if relative_index == 3:
+                return ["DR"], prefix
+            if relative_index == 4:
+                return self._ZONE_OPTIONS, prefix
+            return [], prefix
+
+        if first_tail in ("+", "-"):
+            relative_index = token_index - tail_start
+            if relative_index == 1:
+                return TIMEFRAME_OPTIONS, prefix
+            return ELEMENT_OPTIONS, prefix
+
+        if prefix and any(option.startswith(prefix.upper()) for option in self._RANGE_KIND_OPTIONS):
+            return self._RANGE_KIND_OPTIONS, prefix
+        return ["ACTUAL", "PREV"], prefix
+
+    def focusOutEvent(self, event) -> None:  # type: ignore[override]
+        text = " ".join(self.text().replace("\n", " ").split())
+        if text != self.text():
+            self.setText(text)
+        super().focusOutEvent(event)
+
+
 @dataclass(slots=True)
 class TransitionScenarioData:
     image_path: str
     notation: str = ""
-    text: str = ""
+    meaning_notation: str = ""
+    why_text: str = ""
 
 
 class TransitionScenarioWidget(QFrame):
@@ -272,8 +523,7 @@ class TransitionScenarioWidget(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
         self._base_dir: Path | None = None
-        self._last_generated = ""
-        self._updating_manual = False
+        self._follow_up_visible = False
         self._source_pixmap = QPixmap()
 
         root = QVBoxLayout(self)
@@ -316,29 +566,40 @@ class TransitionScenarioWidget(QFrame):
         self.notation_status = QLabel("")
         root.addWidget(self.notation_status)
 
-        root.addWidget(QLabel("Текст под картинкой (ручное редактирование) *"))
+        self.meaning_label = QLabel("Что это будет означать?")
+        root.addWidget(self.meaning_label)
+
+        self.meaning_notation_edit = TransitionMeaningNotationEdit()
+        root.addWidget(self.meaning_notation_edit)
+
+        self.meaning_status = QLabel("")
+        root.addWidget(self.meaning_status)
+
+        self.why_label = QLabel("Почему?")
+        root.addWidget(self.why_label)
+
         self.manual_edit = QPlainTextEdit()
-        self.manual_edit.setPlaceholderText("Описание сценария перехода")
-        self.manual_edit.setMinimumHeight(110)
+        self.manual_edit.setPlaceholderText("Explain why this interpretation is valid")
+        self.manual_edit.setMinimumHeight(120)
+        self.manual_edit.setFixedHeight(120)
         self.manual_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.manual_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.manual_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.manual_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.manual_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         root.addWidget(self.manual_edit)
 
         self.image_path = data.image_path
         self.path_label.setText(data.image_path)
         self.notation_edit.setText(data.notation)
-        self.manual_edit.setPlainText(data.text)
+        self.meaning_notation_edit.setText(data.meaning_notation)
+        self.manual_edit.setPlainText(data.why_text)
 
         self._on_notation_changed()
+        self._on_meaning_notation_changed()
         self._update_image_preview()
 
         self.notation_edit.textChanged.connect(self._on_notation_changed)
-        self.manual_edit.textChanged.connect(self._on_manual_changed)
-        manual_layout = self.manual_edit.document().documentLayout()
-        if manual_layout is not None:
-            manual_layout.documentSizeChanged.connect(self._update_manual_edit_height)
-        QTimer.singleShot(0, self._update_manual_edit_height)
+        self.meaning_notation_edit.textChanged.connect(self._on_meaning_notation_changed)
+        self.manual_edit.textChanged.connect(self.changed)
 
     def set_index(self, index: int) -> None:
         self.title_label.setText(f"Сценарий #{index}")
@@ -351,12 +612,13 @@ class TransitionScenarioWidget(QFrame):
         return TransitionScenarioData(
             image_path=self.image_path,
             notation=self.notation_edit.text().strip(),
-            text=self.manual_edit.toPlainText().strip(),
+            meaning_notation=self.meaning_notation_edit.text().strip(),
+            why_text=self.manual_edit.toPlainText().strip(),
         )
 
     def validate(self) -> tuple[bool, str]:
         if not self.image_path.strip():
-            return False, "Не выбрана картинка."
+            return False, "Image is not selected."
 
         notation_text = self.notation_edit.text().strip()
         generated, notation_error = transition_notation_to_text(notation_text)
@@ -364,10 +626,25 @@ class TransitionScenarioWidget(QFrame):
             return False, notation_error
 
         if not generated:
-            return False, "Нотация не заполнена."
+            return False, "Notation is empty."
+
+        action = transition_action_from_notation(notation_text)
+        if action is None:
+            return False, "Specify CREATE/NOT CREATE/GET/NOT GET."
+
+        meaning_notation = self.meaning_notation_edit.text().strip()
+        if not meaning_notation:
+            return False, "Fill 'What does this mean?' notation."
+
+        meaning_generated, meaning_error = transition_meaning_notation_to_text(meaning_notation)
+        if meaning_error:
+            return False, meaning_error
+
+        if not meaning_generated:
+            return False, "Meaning notation is empty."
 
         if not self.manual_edit.toPlainText().strip():
-            return False, "Заполните текст под картинкой."
+            return False, "Fill 'Why?'."
 
         return True, ""
 
@@ -375,6 +652,7 @@ class TransitionScenarioWidget(QFrame):
         data = self.to_data()
         image_markdown_path = self._to_markdown_path(Path(data.image_path), base_dir)
         alt_text = Path(image_markdown_path).stem or f"transition_{index}"
+        meaning_generated, _ = transition_meaning_notation_to_text(data.meaning_notation)
 
         parts = [
             f"#### Сценарий {index}",
@@ -383,51 +661,94 @@ class TransitionScenarioWidget(QFrame):
             "<!-- TRANSITION_NOTATION",
             data.notation.strip(),
             "-->",
-            "",
-            data.text,
         ]
+        if data.meaning_notation.strip():
+            parts.extend(
+                [
+                    "",
+                    "<!-- TRANSITION_MEANING_NOTATION",
+                    data.meaning_notation.strip(),
+                    "-->",
+                ]
+            )
+        if data.why_text.strip():
+            parts.extend(
+                [
+                    "",
+                    "<!-- TRANSITION_WHY",
+                    data.why_text.strip(),
+                    "-->",
+                ]
+            )
+
+        if meaning_generated:
+            parts.extend(
+                [
+                    "",
+                    f"**Что это будет означать?:** {meaning_generated}",
+                ]
+            )
+        if data.why_text.strip():
+            parts.extend(
+                [
+                    "",
+                    "**Почему?:**",
+                    data.why_text.strip(),
+                ]
+            )
         return "\n".join(parts).strip()
 
     def _on_notation_changed(self) -> None:
         notation_text = self.notation_edit.text().strip()
         generated, error = transition_notation_to_text(notation_text)
+        has_action = transition_action_from_notation(notation_text) is not None
+        self._set_follow_up_visible(has_action)
+        self._on_meaning_notation_changed(emit_change=False)
         if error:
-            self.notation_status.setText(f"Подсказка: {error}")
+            self.notation_status.setText(f"Hint: {error}")
             self.notation_status.setStyleSheet("color: #9a6b00;")
             self.changed.emit()
             return
 
-        self.notation_status.setText(f"Результат: {generated}")
+        self.notation_status.setText(f"Result: {generated}")
         self.notation_status.setStyleSheet("color: #1f6f43;")
-
-        manual = self.manual_edit.toPlainText().strip()
-        if not manual or manual == self._last_generated:
-            self._updating_manual = True
-            self.manual_edit.setPlainText(generated or "")
-            self._updating_manual = False
-
-        self._last_generated = generated or ""
-        self._update_manual_edit_height()
         self.changed.emit()
 
-    def _on_manual_changed(self) -> None:
-        if self._updating_manual:
+    def _on_meaning_notation_changed(self, emit_change: bool = True) -> None:
+        if not self._follow_up_visible:
+            self.meaning_status.clear()
+            if emit_change:
+                self.changed.emit()
             return
-        self._update_manual_edit_height()
-        self.changed.emit()
 
-    def _update_manual_edit_height(self, *_args) -> None:
-        document_layout = self.manual_edit.document().documentLayout()
-        if document_layout is None:
+        meaning_text = self.meaning_notation_edit.text().strip()
+        if not meaning_text:
+            self.meaning_status.setText("Hint: fill notation for 'What does this mean?'")
+            self.meaning_status.setStyleSheet("color: #9a6b00;")
+            if emit_change:
+                self.changed.emit()
             return
-        content_height = int(document_layout.documentSize().height())
-        margins = self.manual_edit.contentsMargins()
-        target_height = max(
-            110,
-            content_height + (self.manual_edit.frameWidth() * 2) + margins.top() + margins.bottom() + 12,
-        )
-        if self.manual_edit.height() != target_height:
-            self.manual_edit.setFixedHeight(target_height)
+
+        generated, error = transition_meaning_notation_to_text(meaning_text)
+        if error:
+            self.meaning_status.setText(f"Hint: {error}")
+            self.meaning_status.setStyleSheet("color: #9a6b00;")
+            if emit_change:
+                self.changed.emit()
+            return
+
+        self.meaning_status.setText(f"Result: {generated}")
+        self.meaning_status.setStyleSheet("color: #1f6f43;")
+        if emit_change:
+            self.changed.emit()
+
+    def _set_follow_up_visible(self, visible: bool) -> None:
+        self._follow_up_visible = visible
+        self.meaning_label.setVisible(visible)
+        self.meaning_notation_edit.setVisible(visible)
+        self.meaning_status.setVisible(visible)
+        self.why_label.setVisible(visible)
+        self.manual_edit.setVisible(visible)
 
     def _resolve_image_path(self) -> Path:
         candidate = Path(self.image_path)
@@ -542,7 +863,7 @@ class TransitionScenariosEditor(QWidget):
         for index, entry in enumerate(self._entries, start=1):
             data = entry.to_data()
             reference = data.notation.strip() or f"Сценарий #{index}"
-            preview_source = data.notation.strip() or data.text.strip()
+            preview_source = data.notation.strip() or data.meaning_notation.strip() or data.why_text.strip()
             preview = re.sub(r"\s+", " ", preview_source).strip()
             if len(preview) > 90:
                 preview = f"{preview[:87]}..."
@@ -634,6 +955,12 @@ class TransitionScenariosEditor(QWidget):
                 notation_match = re.search(r"(?is)Notation:\s*\n(.*?)(?:\n\s*Text:|\Z)", chunk)
                 notation = notation_match.group(1).strip() if notation_match else ""
 
+            meaning_match = re.search(r"(?is)<!--\s*TRANSITION_MEANING_NOTATION\s*(.*?)\s*-->", chunk)
+            meaning_notation = meaning_match.group(1).strip() if meaning_match else ""
+
+            why_match = re.search(r"(?is)<!--\s*TRANSITION_WHY\s*(.*?)\s*-->", chunk)
+            why_text = why_match.group(1).strip() if why_match else ""
+
             manual_text = ""
             if notation_match:
                 manual_text = chunk[notation_match.end() :].strip()
@@ -641,17 +968,29 @@ class TransitionScenariosEditor(QWidget):
                 text_match = re.search(r"(?is)Text:\s*\n(.*)$", chunk)
                 manual_text = text_match.group(1).strip() if text_match else ""
 
+            if not why_text:
+                why_section_match = re.search(r"(?is)\*\*(?:Why\?|Почему\?):\*\*\s*(.*)$", chunk)
+                why_text = why_section_match.group(1).strip() if why_section_match else ""
+
             if not manual_text:
                 body_after_image = chunk[match.end() - start :].strip()
                 body_after_image = re.sub(r"(?is)<!--\s*TRANSITION_NOTATION\s*.*?-->", "", body_after_image).strip()
+                body_after_image = re.sub(r"(?is)<!--\s*TRANSITION_MEANING_NOTATION\s*.*?-->", "", body_after_image).strip()
+                body_after_image = re.sub(r"(?is)<!--\s*TRANSITION_WHY\s*.*?-->", "", body_after_image).strip()
                 body_after_image = re.sub(r"(?is)Notation:\s*\n.*$", "", body_after_image).strip()
+                body_after_image = re.sub(r"(?mi)^\*\*(?:What does this mean\?|Что это будет означать\?):\*\*\s*.*$", "", body_after_image).strip()
+                body_after_image = re.sub(r"(?mi)^\*\*(?:Why\?|Почему\?):\*\*\s*", "", body_after_image).strip()
                 manual_text = body_after_image.strip()
+
+            if not why_text:
+                why_text = manual_text.strip()
 
             entries.append(
                 TransitionScenarioData(
                     image_path=image_path,
                     notation=notation,
-                    text=manual_text,
+                    meaning_notation=meaning_notation,
+                    why_text=why_text,
                 )
             )
 
