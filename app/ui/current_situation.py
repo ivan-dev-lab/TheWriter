@@ -29,9 +29,18 @@ ELEMENT_OPTIONS = [
     "FL",
     "FH",
 ]
+ZONE_OPTIONS = ["Premium", "Equilibrium", "Discount"]
+DIRECTION_OPTIONS = ["UP", "DOWN"]
 
-_LINE_1_RE = re.compile(r"^(IN|OUT)\s+([+-])\s+([A-Za-z0-9]+)\s+(.+)$", re.IGNORECASE)
-_LINE_2_RE = re.compile(r"^(Actual|Prev)\s+([+-])\s+([A-Za-z0-9]+)\s+DR$", re.IGNORECASE)
+_LINE_1_IN_RE = re.compile(r"^IN\s+([+-])\s+([A-Za-z0-9]+)\s+([A-Za-z][A-Za-z0-9_-]*)$", re.IGNORECASE)
+_LINE_1_RANGE_RE = re.compile(
+    r"^RANGE\s+([+-])\s+([A-Za-z0-9]+)\s+([A-Za-z][A-Za-z0-9_-]*)(?:\s+([+-])\s+([A-Za-z0-9]+)\s+([A-Za-z][A-Za-z0-9_-]*))?$",
+    re.IGNORECASE,
+)
+_RANGE_CLAUSE_RE = re.compile(
+    r"^(Actual|Prev)\s+([+-])\s+([A-Za-z0-9]+)\s+(?:DR\s+)?(Premium|Equilibrium|Discount)$",
+    re.IGNORECASE,
+)
 _IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
 
 
@@ -40,32 +49,103 @@ def notation_to_text(notation: str) -> tuple[str | None, str | None]:
     if len(lines) != 2:
         return None, "Нотация должна содержать ровно 2 непустые строки."
 
-    line_1_match = _LINE_1_RE.match(lines[0])
-    if not line_1_match:
-        return None, "1 строка: IN/OUT [+/- TF Element]"
+    def sign_text(sign: str) -> str:
+        return "бычьего" if sign == "+" else "медвежьего"
 
-    line_2_match = _LINE_2_RE.match(lines[1])
-    if not line_2_match:
-        return None, "2 строка: Actual/Prev [+/- TF DR]"
+    def actual_prev_text(value: str) -> str:
+        return "актуального" if value.upper() == "ACTUAL" else "предыдущего"
 
-    in_out, sign_1, tf_1, element = line_1_match.groups()
-    actual_prev, sign_2, tf_2 = line_2_match.groups()
+    def normalize_zone(value: str) -> str:
+        lookup = {"premium": "Premium", "equilibrium": "Equilibrium", "discount": "Discount"}
+        return lookup.get(value.casefold(), value)
 
-    in_out_text = "внутри" if in_out.upper() == "IN" else "за пределами"
-    sign_1_text = "бычьего" if sign_1 == "+" else "медвежьего"
-    actual_prev_text = "актуального" if actual_prev.upper() == "ACTUAL" else "предыдущего"
-    sign_2_text = "бычьего" if sign_2 == "+" else "медвежьего"
+    def parse_range_clause(clause_text: str) -> tuple[tuple[str, str, str, str] | None, str | None]:
+        match = _RANGE_CLAUSE_RE.match(clause_text.strip())
+        if not match:
+            return None, "Формат диапазона: Actual/Prev +/- TF DR Premium/Equilibrium/Discount"
+        actual_prev, direction_sign, timeframe, zone = match.groups()
+        return (
+            actual_prev.upper(),
+            direction_sign,
+            timeframe.upper(),
+            normalize_zone(zone),
+        ), None
 
+    line_1 = lines[0]
+    line_2 = lines[1]
+
+    in_match = _LINE_1_IN_RE.match(line_1)
+    if in_match:
+        sign_1, tf_1, element = in_match.groups()
+        clause_data, clause_error = parse_range_clause(line_2)
+        if clause_error:
+            return None, "2 строка: Actual/Prev +/- TF DR Premium/Equilibrium/Discount"
+        assert clause_data is not None
+        actual_prev, sign_2, tf_2, zone = clause_data
+        element_desc = f"{sign_text(sign_1)} {tf_1.upper()} {element}"
+        text = (
+            f"Цена находится внутри {element_desc}. "
+            f"Данный {element} находится в отметках {zone} {actual_prev_text(actual_prev)} "
+            f"{sign_text(sign_2)} торгового диапазона на {tf_2} TF."
+        )
+        return text, None
+
+    range_match = _LINE_1_RANGE_RE.match(line_1)
+    if not range_match:
+        return None, "1 строка: IN +/- TF Element или RANGE +/- TF Element [+/- TF Element]"
+
+    sign_1, tf_1, element_1, sign_2, tf_2, element_2 = range_match.groups()
+    first_element_desc = f"{sign_text(sign_1)} {tf_1.upper()} {element_1}"
+
+    has_second_element = all([sign_2, tf_2, element_2])
+    if has_second_element:
+        parts = [part.strip() for part in re.split(r"\s*[|;]\s*", line_2) if part.strip()]
+        if len(parts) != 2:
+            return None, "2 строка для RANGE с 2 элементами: <диапазон 1> | <диапазон 2>"
+
+        clause_1, error_1 = parse_range_clause(parts[0])
+        clause_2, error_2 = parse_range_clause(parts[1])
+        if error_1 or error_2:
+            return None, "2 строка для RANGE: Actual/Prev +/- TF DR Premium/Equilibrium/Discount | Actual/Prev +/- TF DR Premium/Equilibrium/Discount"
+        assert clause_1 is not None and clause_2 is not None
+
+        range_1_text = (
+            f"{clause_1[3]} {actual_prev_text(clause_1[0])} {sign_text(clause_1[1])} торгового диапазона на {clause_1[2]} TF"
+        )
+        range_2_text = (
+            f"{clause_2[3]} {actual_prev_text(clause_2[0])} {sign_text(clause_2[1])} торгового диапазона на {clause_2[2]} TF"
+        )
+        second_element_desc = f"{sign_text(sign_2)} {tf_2.upper()} {element_2}"
+        text = (
+            f"Цена находится в диапазоне между {first_element_desc}, расположенного в отметках {range_1_text}, "
+            f"и {second_element_desc}, расположенного в отметках {range_2_text}."
+        )
+        return text, None
+
+    direction_match = re.match(r"^(.*)\s+(UP|DOWN)$", line_2.strip(), re.IGNORECASE)
+    if not direction_match:
+        return None, "2 строка для RANGE с 1 элементом: Actual/Prev +/- TF DR Premium/Equilibrium/Discount UP/DOWN"
+
+    clause_text, direction = direction_match.groups()
+    clause_data, clause_error = parse_range_clause(clause_text)
+    if clause_error:
+        return None, "2 строка для RANGE с 1 элементом: Actual/Prev +/- TF DR Premium/Equilibrium/Discount UP/DOWN"
+    assert clause_data is not None
+
+    ath_or_atl = "ATH" if direction.upper() == "UP" else "ATL"
+    range_text = (
+        f"{clause_data[3]} {actual_prev_text(clause_data[0])} {sign_text(clause_data[1])} торгового диапазона на {clause_data[2]} TF"
+    )
     text = (
-        f"Цена находится {in_out_text} {sign_1_text} {tf_1} {element}. "
-        f"Данный элемент находится внутри {actual_prev_text} "
-        f"{sign_2_text} торгового диапазона на {tf_2}."
+        f"Цена устанавливает {ath_or_atl}. "
+        f"Ближайшая опорная область - {first_element_desc}, расположенный в отметках {range_text}."
     )
     return text, None
 
 
 class NotationTextEdit(QPlainTextEdit):
     _ELEMENT_OPTIONS_NORMALIZED = {re.sub(r"\s+", " ", item).casefold() for item in ELEMENT_OPTIONS}
+    _TIMEFRAME_OPTIONS_NORMALIZED = {item.upper() for item in TIMEFRAME_OPTIONS}
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -75,7 +155,10 @@ class NotationTextEdit(QPlainTextEdit):
         self._completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         self._completer.setWidget(self)
         self._completer.activated.connect(self._insert_completion)
-        self.setPlaceholderText("1 строка: IN/OUT +/- TF Element\n2 строка: Actual/Prev +/- TF DR")
+        self.setPlaceholderText(
+            "1 строка: IN +/- TF Element или RANGE +/- TF Element [+/- TF Element]\n"
+            "2 строка: Actual/Prev +/- TF DR Premium/Equilibrium/Discount"
+        )
         self.setMaximumHeight(84)
 
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
@@ -93,6 +176,7 @@ class NotationTextEdit(QPlainTextEdit):
         force_completion = event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Space
         super().keyPressEvent(event)
         self._maybe_move_to_second_line()
+        self._maybe_autofill_dr_token()
         if force_completion or event.text() or event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete, Qt.Key.Key_Space):
             self._show_completions(force=force_completion)
 
@@ -129,6 +213,7 @@ class NotationTextEdit(QPlainTextEdit):
         cursor.insertText(insert_text)
         self.setTextCursor(cursor)
         self._maybe_move_to_second_line()
+        self._maybe_autofill_dr_token()
 
     def _show_completions(self, force: bool) -> None:
         suggestions, prefix = self._completion_context()
@@ -157,26 +242,50 @@ class NotationTextEdit(QPlainTextEdit):
     def _completion_context(self) -> tuple[list[str], str]:
         cursor = self.textCursor()
         line_number = cursor.blockNumber()
-        line_text = cursor.block().text()
-        before = line_text[: cursor.positionInBlock()]
+        before = cursor.block().text()[: cursor.positionInBlock()]
+        token_source = re.sub(r"([|;])", r" \1 ", before)
 
-        if before and not before.endswith((" ", "\t")):
-            prefix = re.split(r"\s+", before)[-1]
-            token_index = len(re.split(r"\s+", before.strip())) - 1
+        if token_source and not token_source.endswith((" ", "\t")):
+            prefix = re.split(r"\s+", token_source)[-1]
+            token_index = len(re.split(r"\s+", token_source.strip())) - 1
         else:
             prefix = ""
-            token_index = len(re.split(r"\s+", before.strip())) if before.strip() else 0
+            token_index = len(re.split(r"\s+", token_source.strip())) if token_source.strip() else 0
 
         if line_number == 0:
+            first_line_tokens = re.split(r"\s+", before.strip()) if before.strip() else []
             if token_index <= 0:
-                return ["IN", "OUT"], prefix
-            if token_index == 1:
-                return ["+", "-"], prefix
-            if token_index == 2:
-                return TIMEFRAME_OPTIONS, prefix
-            return ELEMENT_OPTIONS, prefix
+                return ["IN", "RANGE"], prefix
+
+            head = first_line_tokens[0].upper() if first_line_tokens else ""
+            if head == "IN":
+                if token_index == 1:
+                    return ["+", "-"], prefix
+                if token_index == 2:
+                    return TIMEFRAME_OPTIONS, prefix
+                if token_index == 3:
+                    return ELEMENT_OPTIONS, prefix
+                return [], prefix
+
+            if head == "RANGE":
+                if token_index == 1:
+                    return ["+", "-"], prefix
+                if token_index == 2:
+                    return TIMEFRAME_OPTIONS, prefix
+                if token_index == 3:
+                    return ELEMENT_OPTIONS, prefix
+                if token_index == 4:
+                    return ["+", "-"], prefix
+                if token_index == 5:
+                    return TIMEFRAME_OPTIONS, prefix
+                if token_index == 6:
+                    return ELEMENT_OPTIONS, prefix
+                return [], prefix
+
+            return ["IN", "RANGE"], prefix
 
         if line_number == 1:
+            mode, range_elements = self._current_mode_and_element_count()
             if token_index <= 0:
                 return ["Actual", "Prev"], prefix
             if token_index == 1:
@@ -185,6 +294,23 @@ class NotationTextEdit(QPlainTextEdit):
                 return TIMEFRAME_OPTIONS, prefix
             if token_index == 3:
                 return ["DR"], prefix
+            if token_index == 4:
+                return ZONE_OPTIONS, prefix
+            if mode == "RANGE" and range_elements == 1 and token_index == 5:
+                return DIRECTION_OPTIONS, prefix
+            if mode == "RANGE" and range_elements == 2:
+                if token_index == 5:
+                    return ["|"], prefix
+                if token_index == 6:
+                    return ["Actual", "Prev"], prefix
+                if token_index == 7:
+                    return ["+", "-"], prefix
+                if token_index == 8:
+                    return TIMEFRAME_OPTIONS, prefix
+                if token_index == 9:
+                    return ["DR"], prefix
+                if token_index == 10:
+                    return ZONE_OPTIONS, prefix
 
         return [], prefix
 
@@ -214,21 +340,90 @@ class NotationTextEdit(QPlainTextEdit):
 
     @classmethod
     def _is_first_line_complete(cls, line_text: str) -> bool:
-        tokens = line_text.strip().split()
-        if len(tokens) < 4:
-            return False
-        if tokens[0].upper() not in ("IN", "OUT"):
-            return False
-        if tokens[1] not in ("+", "-"):
-            return False
-        if tokens[2].upper() not in {value.upper() for value in TIMEFRAME_OPTIONS}:
-            return False
+        first_line = line_text.strip()
+        in_match = _LINE_1_IN_RE.match(first_line)
+        if in_match:
+            _sign, timeframe, element = in_match.groups()
+            return (
+                timeframe.upper() in cls._TIMEFRAME_OPTIONS_NORMALIZED
+                and element.casefold() in cls._ELEMENT_OPTIONS_NORMALIZED
+            )
 
-        element_text = " ".join(tokens[3:]).strip()
-        if not element_text:
-            return False
-        normalized_element = re.sub(r"\s+", " ", element_text).casefold()
-        return len(tokens) == 4 or normalized_element in cls._ELEMENT_OPTIONS_NORMALIZED
+        range_match = _LINE_1_RANGE_RE.match(first_line)
+        if range_match:
+            sign_1, tf_1, element_1, sign_2, tf_2, element_2 = range_match.groups()
+            first_ok = (
+                sign_1 in ("+", "-")
+                and tf_1.upper() in cls._TIMEFRAME_OPTIONS_NORMALIZED
+                and element_1.casefold() in cls._ELEMENT_OPTIONS_NORMALIZED
+            )
+            if not first_ok:
+                return False
+            if not all([sign_2, tf_2, element_2]):
+                return True
+            return (
+                sign_2 in ("+", "-")
+                and tf_2.upper() in cls._TIMEFRAME_OPTIONS_NORMALIZED
+                and element_2.casefold() in cls._ELEMENT_OPTIONS_NORMALIZED
+            )
+        return False
+
+    def _current_mode_and_element_count(self) -> tuple[str | None, int]:
+        first_line = self.document().findBlockByNumber(0).text().strip()
+        if _LINE_1_IN_RE.match(first_line):
+            return "IN", 1
+
+        match = _LINE_1_RANGE_RE.match(first_line)
+        if match:
+            return "RANGE", 2 if all(match.groups()[3:]) else 1
+
+        tokens = first_line.split()
+        if not tokens:
+            return None, 0
+        if tokens[0].upper() == "IN":
+            return "IN", 1
+        if tokens[0].upper() == "RANGE":
+            return "RANGE", 2 if len(tokens) >= 7 else 1
+        return None, 0
+
+    def _maybe_autofill_dr_token(self) -> None:
+        cursor = self.textCursor()
+        if cursor.blockNumber() != 1:
+            return
+
+        mode, range_elements = self._current_mode_and_element_count()
+        if mode is None:
+            return
+
+        before = cursor.block().text()[: cursor.positionInBlock()]
+        token_source = re.sub(r"([|;])", r" \1 ", before)
+        if not token_source.endswith((" ", "\t")):
+            return
+        tokens = re.split(r"\s+", token_source.strip()) if token_source.strip() else []
+        if not tokens:
+            return
+
+        def is_range_prefix(start: int) -> bool:
+            if len(tokens) < start + 3:
+                return False
+            if tokens[start].upper() not in ("ACTUAL", "PREV"):
+                return False
+            if tokens[start + 1] not in ("+", "-"):
+                return False
+            if tokens[start + 2].upper() not in self._TIMEFRAME_OPTIONS_NORMALIZED:
+                return False
+            return True
+
+        should_insert = len(tokens) == 3 and is_range_prefix(0)
+        if mode == "RANGE" and range_elements == 2:
+            should_insert = should_insert or (
+                len(tokens) == 9 and len(tokens) > 5 and tokens[5] in ("|", ";") and is_range_prefix(6)
+            )
+
+        if should_insert:
+            cursor.insertText("DR ")
+            self.setTextCursor(cursor)
+            QTimer.singleShot(0, lambda: self._show_completions(force=True))
 
 
 @dataclass(slots=True)
