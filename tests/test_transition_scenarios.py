@@ -44,15 +44,28 @@ def test_transition_notation_invalid_format() -> None:
     text, error = transition_notation_to_text("SOMETHING + H1 OB")
     assert text is None
     assert error is not None
-    assert "CREATE/NOT CREATE" in error
+    assert "Формат нотации" in error
 
 
-def test_transition_notation_create_rejects_get_tail() -> None:
+def test_transition_notation_create_with_range_success() -> None:
     notation = "CREATE + H1 OB ACTUAL - H4 DR Premium"
     text, error = transition_notation_to_text(notation)
-    assert text is None
-    assert error is not None
-    assert "create/not create" in error.casefold()
+    assert error is None
+    assert text is not None
+    assert "[+H1 OB]" in text
+    assert "[-H4 DR]" in text
+    assert "Premium" in text
+
+
+def test_transition_notation_not_create_with_clause_success() -> None:
+    notation = "NOT CREATE + M5 FVG WITH - H1 OB PREV + D1 DR Discount"
+    text, error = transition_notation_to_text(notation)
+    assert error is None
+    assert text is not None
+    assert "[+M5 FVG]" in text
+    assert "[-H1 OB]" in text
+    assert "[+D1 DR]" in text
+    assert "Discount" in text
 
 
 def test_transition_action_from_notation_detects_action_early() -> None:
@@ -107,8 +120,31 @@ Because liquidity remains above the prior high.
     entries = TransitionScenariosEditor._parse_entries(markdown)
     assert len(entries) == 1
     entry = entries[0]
-    assert entry.image_path == "img.png"
-    assert entry.timeframe == "H1"
+    assert len(entry.images) == 1
+    assert entry.images[0].image_path == "img.png"
+    assert entry.images[0].timeframe == "H1"
     assert entry.notation == "CREATE + H1 OB"
     assert entry.meaning_notation == "ADV BUY UP + H1 OB"
     assert entry.why_text == "Because liquidity remains above the prior high."
+
+
+def test_parse_transition_scenarios_multiple_images_in_one_scenario() -> None:
+    markdown = """#### Сценарий 1
+![scenario_1](img_1.png)
+**TF:** H1
+
+![scenario_2](img_2.png)
+**TF:** M15
+
+<!-- TRANSITION_NOTATION
+CREATE + H1 OB WITH - M5 FVG ACTUAL + D1 DR Premium
+-->
+"""
+    entries = TransitionScenariosEditor._parse_entries(markdown)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert len(entry.images) == 2
+    assert entry.images[0].image_path == "img_1.png"
+    assert entry.images[0].timeframe == "H1"
+    assert entry.images[1].image_path == "img_2.png"
+    assert entry.images[1].timeframe == "M15"

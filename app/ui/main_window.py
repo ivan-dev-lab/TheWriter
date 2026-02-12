@@ -822,6 +822,9 @@ class MainWindow(QMainWindow):
 
     def _preview_markdown(self) -> str:
         markdown, _ = self._compose_current_markdown()
+        # Hide metadata comments in preview so text appears immediately under media.
+        markdown = re.sub(r"(?s)<!--.*?-->", "", markdown)
+        markdown = re.sub(r"\n{3,}", "\n\n", markdown).strip()
         return markdown
 
     def _current_preview_base_dir(self) -> Path | None:
@@ -840,6 +843,7 @@ class MainWindow(QMainWindow):
             body = f"<pre>{html.escape(markdown)}</pre>"
         else:
             body = markdown_renderer.markdown(markdown, extensions=["fenced_code", "tables", "sane_lists"])
+            body = re.sub(r"(?is)<p>\s*(<img[^>]*>)\s*</p>", r"\1", body)
 
         rendered = f"""
         <html>
@@ -853,15 +857,18 @@ class MainWindow(QMainWindow):
                 background: #ffffff;
                 margin: 10px;
               }}
+              h1, h2, h3, h4, h5, h6 {{
+                margin: 10px 0 6px;
+              }}
               p {{
-                margin: 4px 0;
+                margin: 2px 0;
               }}
               img {{
                 display: block;
                 max-width: 100%;
                 max-height: 58vh;
                 height: auto;
-                margin: 0 0 4px 0;
+                margin: 0;
                 border-radius: 6px;
               }}
               pre {{
