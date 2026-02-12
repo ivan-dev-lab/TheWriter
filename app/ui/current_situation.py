@@ -30,11 +30,14 @@ ELEMENT_OPTIONS = [
     "FH",
 ]
 ZONE_OPTIONS = ["Premium", "Equilibrium", "Discount"]
-DIRECTION_OPTIONS = ["UP", "DOWN"]
 
 _LINE_1_IN_RE = re.compile(r"^IN\s+([+-])\s+([A-Za-z0-9]+)\s+([A-Za-z][A-Za-z0-9_-]*)$", re.IGNORECASE)
-_LINE_1_RANGE_RE = re.compile(
-    r"^RANGE\s+([+-])\s+([A-Za-z0-9]+)\s+([A-Za-z][A-Za-z0-9_-]*)(?:\s+([+-])\s+([A-Za-z0-9]+)\s+([A-Za-z][A-Za-z0-9_-]*))?$",
+_LINE_1_RANGE_ONE_RE = re.compile(
+    r"^RANGE\s+([+-])\s+([A-Za-z0-9]+)\s+([A-Za-z][A-Za-z0-9_-]*)\s+(UP|DOWN)$",
+    re.IGNORECASE,
+)
+_LINE_1_RANGE_TWO_RE = re.compile(
+    r"^RANGE\s+([+-])\s+([A-Za-z0-9]+)\s+([A-Za-z][A-Za-z0-9_-]*)\s+([+-])\s+([A-Za-z0-9]+)\s+([A-Za-z][A-Za-z0-9_-]*)$",
     re.IGNORECASE,
 )
 _RANGE_CLAUSE_RE = re.compile(
@@ -90,15 +93,10 @@ def notation_to_text(notation: str) -> tuple[str | None, str | None]:
         )
         return text, None
 
-    range_match = _LINE_1_RANGE_RE.match(line_1)
-    if not range_match:
-        return None, "1 строка: IN +/- TF Element или RANGE +/- TF Element [+/- TF Element]"
-
-    sign_1, tf_1, element_1, sign_2, tf_2, element_2 = range_match.groups()
-    first_element_desc = f"{sign_text(sign_1)} {tf_1.upper()} {element_1}"
-
-    has_second_element = all([sign_2, tf_2, element_2])
-    if has_second_element:
+    range_two_match = _LINE_1_RANGE_TWO_RE.match(line_1)
+    if range_two_match:
+        sign_1, tf_1, element_1, sign_2, tf_2, element_2 = range_two_match.groups()
+        first_element_desc = f"{sign_text(sign_1)} {tf_1.upper()} {element_1}"
         parts = [part.strip() for part in re.split(r"\s*[|;]\s*", line_2) if part.strip()]
         if len(parts) != 2:
             return None, "2 строка для RANGE с 2 элементами: <диапазон 1> | <диапазон 2>"
@@ -122,14 +120,15 @@ def notation_to_text(notation: str) -> tuple[str | None, str | None]:
         )
         return text, None
 
-    direction_match = re.match(r"^(.*)\s+(UP|DOWN)$", line_2.strip(), re.IGNORECASE)
-    if not direction_match:
-        return None, "2 строка для RANGE с 1 элементом: Actual/Prev +/- TF DR Premium/Equilibrium/Discount UP/DOWN"
+    range_one_match = _LINE_1_RANGE_ONE_RE.match(line_1)
+    if not range_one_match:
+        return None, "1 строка: IN +/- TF Element или RANGE +/- TF Element (UP/DOWN или +/- TF Element)"
 
-    clause_text, direction = direction_match.groups()
-    clause_data, clause_error = parse_range_clause(clause_text)
+    sign_1, tf_1, element_1, direction = range_one_match.groups()
+    first_element_desc = f"{sign_text(sign_1)} {tf_1.upper()} {element_1}"
+    clause_data, clause_error = parse_range_clause(line_2)
     if clause_error:
-        return None, "2 строка для RANGE с 1 элементом: Actual/Prev +/- TF DR Premium/Equilibrium/Discount UP/DOWN"
+        return None, "2 строка для RANGE с 1 элементом: Actual/Prev +/- TF DR Premium/Equilibrium/Discount"
     assert clause_data is not None
 
     ath_or_atl = "ATH" if direction.upper() == "UP" else "ATL"
@@ -156,7 +155,7 @@ class NotationTextEdit(QPlainTextEdit):
         self._completer.setWidget(self)
         self._completer.activated.connect(self._insert_completion)
         self.setPlaceholderText(
-            "1 строка: IN +/- TF Element или RANGE +/- TF Element [+/- TF Element]\n"
+            "1 строка: IN +/- TF Element или RANGE +/- TF Element (UP/DOWN или +/- TF Element)\n"
             "2 строка: Actual/Prev +/- TF DR Premium/Equilibrium/Discount"
         )
         self.setMaximumHeight(84)
@@ -275,7 +274,7 @@ class NotationTextEdit(QPlainTextEdit):
                 if token_index == 3:
                     return ELEMENT_OPTIONS, prefix
                 if token_index == 4:
-                    return ["+", "-"], prefix
+                    return ["UP", "DOWN", "+", "-"], prefix
                 if token_index == 5:
                     return TIMEFRAME_OPTIONS, prefix
                 if token_index == 6:
@@ -296,8 +295,6 @@ class NotationTextEdit(QPlainTextEdit):
                 return ["DR"], prefix
             if token_index == 4:
                 return ZONE_OPTIONS, prefix
-            if mode == "RANGE" and range_elements == 1 and token_index == 5:
-                return DIRECTION_OPTIONS, prefix
             if mode == "RANGE" and range_elements == 2:
                 if token_index == 5:
                     return ["|"], prefix
@@ -349,20 +346,27 @@ class NotationTextEdit(QPlainTextEdit):
                 and element.casefold() in cls._ELEMENT_OPTIONS_NORMALIZED
             )
 
-        range_match = _LINE_1_RANGE_RE.match(first_line)
-        if range_match:
-            sign_1, tf_1, element_1, sign_2, tf_2, element_2 = range_match.groups()
+        range_one_match = _LINE_1_RANGE_ONE_RE.match(first_line)
+        if range_one_match:
+            sign_1, tf_1, element_1, _direction = range_one_match.groups()
             first_ok = (
                 sign_1 in ("+", "-")
                 and tf_1.upper() in cls._TIMEFRAME_OPTIONS_NORMALIZED
                 and element_1.casefold() in cls._ELEMENT_OPTIONS_NORMALIZED
             )
-            if not first_ok:
-                return False
-            if not all([sign_2, tf_2, element_2]):
-                return True
+            return first_ok
+
+        range_two_match = _LINE_1_RANGE_TWO_RE.match(first_line)
+        if range_two_match:
+            sign_1, tf_1, element_1, sign_2, tf_2, element_2 = range_two_match.groups()
+            first_ok = (
+                sign_1 in ("+", "-")
+                and tf_1.upper() in cls._TIMEFRAME_OPTIONS_NORMALIZED
+                and element_1.casefold() in cls._ELEMENT_OPTIONS_NORMALIZED
+            )
             return (
-                sign_2 in ("+", "-")
+                first_ok
+                and sign_2 in ("+", "-")
                 and tf_2.upper() in cls._TIMEFRAME_OPTIONS_NORMALIZED
                 and element_2.casefold() in cls._ELEMENT_OPTIONS_NORMALIZED
             )
@@ -373,9 +377,10 @@ class NotationTextEdit(QPlainTextEdit):
         if _LINE_1_IN_RE.match(first_line):
             return "IN", 1
 
-        match = _LINE_1_RANGE_RE.match(first_line)
-        if match:
-            return "RANGE", 2 if all(match.groups()[3:]) else 1
+        if _LINE_1_RANGE_ONE_RE.match(first_line):
+            return "RANGE", 1
+        if _LINE_1_RANGE_TWO_RE.match(first_line):
+            return "RANGE", 2
 
         tokens = first_line.split()
         if not tokens:
@@ -383,7 +388,9 @@ class NotationTextEdit(QPlainTextEdit):
         if tokens[0].upper() == "IN":
             return "IN", 1
         if tokens[0].upper() == "RANGE":
-            return "RANGE", 2 if len(tokens) >= 7 else 1
+            if len(tokens) >= 7:
+                return "RANGE", 2
+            return "RANGE", 1
         return None, 0
 
     def _maybe_autofill_dr_token(self) -> None:

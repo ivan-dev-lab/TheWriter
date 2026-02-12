@@ -24,7 +24,7 @@ def test_notation_to_text_range_two_elements_success() -> None:
 
 
 def test_notation_to_text_range_one_element_success() -> None:
-    notation = "RANGE + H1 RB\nPrev - H4 DR Equilibrium DOWN"
+    notation = "RANGE + H1 RB DOWN\nPrev - H4 DR Equilibrium"
     text, error = notation_to_text(notation)
     assert error is None
     assert text is not None
@@ -36,7 +36,7 @@ def test_notation_to_text_range_one_element_success() -> None:
 def test_notation_to_text_wrong_first_line() -> None:
     text, error = notation_to_text("WRONG\nActual + H1 DR Premium")
     assert text is None
-    assert error == "1 строка: IN +/- TF Element или RANGE +/- TF Element [+/- TF Element]"
+    assert error == "1 строка: IN +/- TF Element или RANGE +/- TF Element (UP/DOWN или +/- TF Element)"
 
 
 def test_notation_to_text_wrong_second_line() -> None:
