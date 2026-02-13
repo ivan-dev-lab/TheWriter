@@ -3,3 +3,7 @@ __pycache__/
 .pytest_cache/
 ТЕСТОВЫЕ ПЛАНЫ/
 Plans/
+main/
+main.exe
+*.ico
+*.txt
