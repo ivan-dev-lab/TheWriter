@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
 from ..core.autosave import AutoSaveController
 from ..core.plans import TradingPlan, apply_title_to_markdown
 from ..core.storage import PlanFileInfo, build_draft_path, list_markdown_files, read_markdown, save_markdown
-from ..settings import AppSettings
+from ..settings import AppSettings, get_default_workspace_dir
 from .current_situation import CurrentSituationEditor, notation_to_text as current_situation_notation_to_text
 from .deal_scenarios import DealScenariosEditor
 from .theme import ThemeTokens, build_app_stylesheet, build_markdown_css, get_theme_tokens
@@ -211,16 +211,28 @@ class MainWindow(QMainWindow):
             return directory.parent
         return directory
 
+    @staticmethod
+    def _should_ignore_saved_directory(directory: Path) -> bool:
+        return (directory / "app" / "main.py").exists() and (directory / "AGENTS.md").exists()
+
     def __init__(self) -> None:
         super().__init__()
         self.settings = AppSettings.load()
         self._theme_tokens: ThemeTokens = get_theme_tokens(self.settings.ui_theme)
 
         self.current_directory: Path | None = None
+        default_root = self._normalize_root_directory(get_default_workspace_dir())
         if self.settings.last_directory:
             candidate = Path(self.settings.last_directory)
             if candidate.exists() and candidate.is_dir():
-                self.current_directory = self._normalize_root_directory(candidate)
+                normalized = self._normalize_root_directory(candidate)
+                if not self._should_ignore_saved_directory(normalized):
+                    self.current_directory = normalized
+
+        if self.current_directory is None:
+            self.current_directory = default_root
+            self.settings.last_directory = str(default_root)
+            self.settings.save()
 
         self.current_file: Path | None = None
         self.current_draft_path: Path | None = None
@@ -256,7 +268,12 @@ class MainWindow(QMainWindow):
         opened_last = False
         if self.settings.last_open_file:
             last_file = Path(self.settings.last_open_file)
-            if last_file.exists() and last_file.is_file() and last_file.suffix.lower() == ".md":
+            last_root = self._resolve_root_directory_from_plan_path(last_file) if last_file.exists() else None
+            ignore_last = bool(last_root and self._should_ignore_saved_directory(last_root))
+            if ignore_last:
+                self.settings.last_open_file = ""
+                self.settings.save()
+            if (not ignore_last) and last_file.exists() and last_file.is_file() and last_file.suffix.lower() == ".md":
                 self._open_file(last_file)
                 opened_last = True
 

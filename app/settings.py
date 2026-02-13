@@ -32,6 +32,47 @@ def get_data_dir(app_name: str = APP_NAME) -> Path:
     return base / app_name.lower()
 
 
+def _ensure_directory(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return path.exists() and path.is_dir()
+
+
+def get_default_workspace_dir(app_name: str = APP_NAME) -> Path:
+    candidates: list[Path] = []
+
+    if os.name == "nt":
+        program_w6432 = os.environ.get("ProgramW6432")
+        program_files = os.environ.get("ProgramFiles")
+        program_files_x86 = os.environ.get("ProgramFiles(x86)")
+        program_data = os.environ.get("ProgramData")
+
+        if program_w6432:
+            candidates.append(Path(program_w6432) / app_name)
+        if program_files:
+            pf = Path(program_files) / app_name
+            if pf not in candidates:
+                candidates.append(pf)
+        if program_files_x86:
+            pf86 = Path(program_files_x86) / app_name
+            if pf86 not in candidates:
+                candidates.append(pf86)
+        if program_data:
+            candidates.append(Path(program_data) / app_name)
+
+    candidates.append(get_data_dir(app_name))
+
+    for candidate in candidates:
+        if _ensure_directory(candidate):
+            return candidate
+
+    fallback = get_data_dir(app_name)
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
 @dataclass(slots=True)
 class AppSettings:
     last_directory: str = ""
