@@ -38,6 +38,13 @@ class AppSettings:
     recent_files: list[str] = field(default_factory=list)
     autosave_debounce_ms: int = 1200
     autosave_periodic_ms: int = 15000
+    ui_theme: str = "dark"
+    sidebar_visible: bool = True
+    preview_visible: bool = True
+    sidebar_width: int = 290
+    preview_size: int = 420
+    preview_orientation: str = "vertical"
+    last_open_file: str = ""
 
     @classmethod
     def load(cls) -> "AppSettings":
@@ -66,6 +73,28 @@ class AppSettings:
         if isinstance(periodic, int) and periodic >= 1000:
             settings.autosave_periodic_ms = periodic
 
+        if data.get("ui_theme") in ("dark", "light"):
+            settings.ui_theme = str(data["ui_theme"])
+
+        if isinstance(data.get("sidebar_visible"), bool):
+            settings.sidebar_visible = bool(data["sidebar_visible"])
+        if isinstance(data.get("preview_visible"), bool):
+            settings.preview_visible = bool(data["preview_visible"])
+
+        sidebar_width = data.get("sidebar_width")
+        if isinstance(sidebar_width, int) and 120 <= sidebar_width <= 1200:
+            settings.sidebar_width = sidebar_width
+
+        preview_size = data.get("preview_size")
+        if isinstance(preview_size, int) and 160 <= preview_size <= 1600:
+            settings.preview_size = preview_size
+
+        if data.get("preview_orientation") in ("vertical", "horizontal"):
+            settings.preview_orientation = str(data["preview_orientation"])
+
+        if isinstance(data.get("last_open_file"), str):
+            settings.last_open_file = str(data["last_open_file"])
+
         return settings
 
     def save(self) -> None:
@@ -78,6 +107,13 @@ class AppSettings:
             "recent_files": self.recent_files[:20],
             "autosave_debounce_ms": self.autosave_debounce_ms,
             "autosave_periodic_ms": self.autosave_periodic_ms,
+            "ui_theme": self.ui_theme,
+            "sidebar_visible": self.sidebar_visible,
+            "preview_visible": self.preview_visible,
+            "sidebar_width": self.sidebar_width,
+            "preview_size": self.preview_size,
+            "preview_orientation": self.preview_orientation,
+            "last_open_file": self.last_open_file,
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 

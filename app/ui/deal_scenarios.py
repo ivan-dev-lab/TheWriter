@@ -121,9 +121,9 @@ class DealScenarioWidget(QFrame):
         self.image_frame = QFrame()
         self.image_frame.setFixedHeight(220)
         self.image_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.image_frame.setStyleSheet("QFrame { border: 1px solid #d8dde6; border-radius: 6px; background: #fafbfd; }")
+        self.image_frame.setStyleSheet("QFrame { border: 1px solid #d8dde6; border-radius: 6px; background: transparent; }")
         image_layout = QVBoxLayout(self.image_frame)
-        image_layout.setContentsMargins(2, 2, 2, 2)
+        image_layout.setContentsMargins(0, 0, 0, 0)
         image_layout.setSpacing(0)
 
         self.image_label = QLabel("Изображение не найдено")
@@ -291,6 +291,9 @@ class DealScenarioWidget(QFrame):
             self._source_pixmap = QPixmap()
             self.image_label.setText("Изображение не найдено")
             self.image_label.setPixmap(QPixmap())
+            self.image_label.setMinimumSize(0, 0)
+            self.image_label.setMaximumSize(16777215, 16777215)
+            self.image_frame.setFixedHeight(120)
             return
 
         source = QPixmap(str(resolved))
@@ -298,6 +301,9 @@ class DealScenarioWidget(QFrame):
             self._source_pixmap = QPixmap()
             self.image_label.setText("Не удалось загрузить изображение")
             self.image_label.setPixmap(QPixmap())
+            self.image_label.setMinimumSize(0, 0)
+            self.image_label.setMaximumSize(16777215, 16777215)
+            self.image_frame.setFixedHeight(120)
             return
 
         self._source_pixmap = source
@@ -307,16 +313,19 @@ class DealScenarioWidget(QFrame):
         if self._source_pixmap.isNull():
             return
 
-        target_width = self.image_label.width() if self.image_label.width() > 16 else 640
-        target_height = self.image_label.height() if self.image_label.height() > 16 else 216
-        scaled = self._source_pixmap.scaled(
-            target_width,
-            target_height,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
+        frame_width = self.image_frame.width() if self.image_frame.width() > 16 else self.width()
+        target_width = max(320, int((frame_width - 2) * 1.24))
+        target_width = min(target_width, max(120, frame_width - 2))
+        scaled = self._source_pixmap.scaledToWidth(target_width, Qt.TransformationMode.SmoothTransformation)
+        if scaled.height() > 320:
+            scaled = scaled.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
         self.image_label.setText("")
+        self.image_label.setMinimumSize(scaled.size())
+        self.image_label.setMaximumSize(scaled.size())
         self.image_label.setPixmap(scaled)
+        target_height = max(224, scaled.height() + 2)
+        if self.image_frame.height() != target_height:
+            self.image_frame.setFixedHeight(target_height)
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
