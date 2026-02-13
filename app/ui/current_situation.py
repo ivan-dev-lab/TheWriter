@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QCompleter,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -21,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-TIMEFRAME_OPTIONS = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"]
+TIMEFRAME_OPTIONS = ["m1", "m5", "m15", "h1", "h4", "D1", "W1", "M1"]
 ELEMENT_OPTIONS = [
     "RB",
     "FVG",
@@ -45,6 +46,7 @@ _RANGE_CLAUSE_RE = re.compile(
     re.IGNORECASE,
 )
 _IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
+_NOTATION_COMMENT_RE = re.compile(r"(?is)<!--\s*NOTATION\s*(.*?)\s*-->")
 
 
 def notation_to_text(notation: str) -> tuple[str | None, str | None]:
@@ -448,8 +450,6 @@ class SituationEntryWidget(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
         self._base_dir: Path | None = None
-        self._last_generated = ""
-        self._updating_manual = False
         self._source_pixmap = QPixmap()
 
         root = QVBoxLayout(self)
@@ -480,13 +480,8 @@ class SituationEntryWidget(QFrame):
         image_layout.addWidget(self.image_label)
         root.addWidget(self.image_frame)
 
-        self.path_label = QLabel("")
-        self.path_label.setWordWrap(True)
-        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        root.addWidget(self.path_label)
-
         tf_row = QHBoxLayout()
-        tf_row.addWidget(QLabel("Таймфрейм *"))
+        tf_row.addWidget(QLabel("TF *"))
         self.timeframe_combo = QComboBox()
         self.timeframe_combo.addItem("Выберите TF", "")
         for timeframe in TIMEFRAME_OPTIONS:
@@ -494,44 +489,14 @@ class SituationEntryWidget(QFrame):
         tf_row.addWidget(self.timeframe_combo, 1)
         root.addLayout(tf_row)
 
-        root.addWidget(QLabel("Нотация"))
-        self.notation_edit = NotationTextEdit()
-        self.notation_edit.setFixedHeight(84)
-        self.notation_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.notation_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        root.addWidget(self.notation_edit)
-
-        self.notation_status = QLabel("")
-        root.addWidget(self.notation_status)
-
-        root.addWidget(QLabel("Текст под картинкой (ручное редактирование) *"))
-        self.manual_edit = QPlainTextEdit()
-        self.manual_edit.setPlaceholderText("Текст под картинкой")
-        self.manual_edit.setMinimumHeight(110)
-        self.manual_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.manual_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.manual_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        root.addWidget(self.manual_edit)
-
         self.image_path = data.image_path
-        self.path_label.setText(data.image_path)
-        self.notation_edit.setPlainText(data.notation)
-        self.manual_edit.setPlainText(data.text)
         if data.timeframe:
             index = self.timeframe_combo.findData(data.timeframe)
             if index >= 0:
                 self.timeframe_combo.setCurrentIndex(index)
 
-        self._on_notation_changed()
         self._update_image_preview()
-
         self.timeframe_combo.currentIndexChanged.connect(lambda _: self.changed.emit())
-        self.notation_edit.textChanged.connect(self._on_notation_changed)
-        self.manual_edit.textChanged.connect(self._on_manual_changed)
-        manual_layout = self.manual_edit.document().documentLayout()
-        if manual_layout is not None:
-            manual_layout.documentSizeChanged.connect(self._update_manual_edit_height)
-        QTimer.singleShot(0, self._update_manual_edit_height)
 
     def set_index(self, index: int) -> None:
         self.title_label.setText(f"Картинка #{index}")
@@ -544,8 +509,6 @@ class SituationEntryWidget(QFrame):
         return SituationEntryData(
             image_path=self.image_path,
             timeframe=self.timeframe_combo.currentData() or "",
-            notation=self.notation_edit.toPlainText().strip(),
-            text=self.manual_edit.toPlainText().strip(),
         )
 
     def validate(self) -> tuple[bool, str]:
@@ -553,18 +516,7 @@ class SituationEntryWidget(QFrame):
             return False, "Не выбрана картинка."
 
         if not self.timeframe_combo.currentData():
-            return False, "Укажите таймфрейм."
-
-        notation_text = self.notation_edit.toPlainText().strip()
-        generated, notation_error = notation_to_text(notation_text)
-        if notation_error:
-            return False, notation_error
-
-        if not generated:
-            return False, "Нотация не заполнена."
-
-        if not self.manual_edit.toPlainText().strip():
-            return False, "Заполните текст под картинкой."
+            return False, "Укажите TF."
 
         return True, ""
 
@@ -572,59 +524,12 @@ class SituationEntryWidget(QFrame):
         data = self.to_data()
         image_markdown_path = self._to_markdown_path(Path(data.image_path), base_dir)
         alt_text = Path(image_markdown_path).stem or f"situation_{index}"
-
-        parts = [
-            f"#### Ситуация {index}",
-            f"![{alt_text}]({image_markdown_path})",
-            f"**TF:** {data.timeframe}",
-            "",
-            "<!-- NOTATION",
-            data.notation.strip(),
-            "-->",
-            "",
-            data.text,
-        ]
-        return "\n".join(parts).strip()
-
-    def _on_notation_changed(self) -> None:
-        notation_text = self.notation_edit.toPlainText().strip()
-        generated, error = notation_to_text(notation_text)
-        if error:
-            self.notation_status.setText(f"Подсказка: {error}")
-            self.notation_status.setStyleSheet("color: #9a6b00;")
-            self.changed.emit()
-            return
-
-        self.notation_status.setText(f"Результат: {generated}")
-        self.notation_status.setStyleSheet("color: #1f6f43;")
-
-        manual = self.manual_edit.toPlainText().strip()
-        if not manual or manual == self._last_generated:
-            self._updating_manual = True
-            self.manual_edit.setPlainText(generated or "")
-            self._updating_manual = False
-
-        self._last_generated = generated or ""
-        self.changed.emit()
-
-    def _on_manual_changed(self) -> None:
-        if self._updating_manual:
-            return
-        self._update_manual_edit_height()
-        self.changed.emit()
-
-    def _update_manual_edit_height(self, *_args) -> None:
-        document_layout = self.manual_edit.document().documentLayout()
-        if document_layout is None:
-            return
-        content_height = int(document_layout.documentSize().height())
-        margins = self.manual_edit.contentsMargins()
-        target_height = max(
-            110,
-            content_height + (self.manual_edit.frameWidth() * 2) + margins.top() + margins.bottom() + 12,
-        )
-        if self.manual_edit.height() != target_height:
-            self.manual_edit.setFixedHeight(target_height)
+        return "\n".join(
+            [
+                f"![{alt_text}]({image_markdown_path})",
+                f"**TF:** {data.timeframe}",
+            ]
+        ).strip()
 
     def _resolve_image_path(self) -> Path:
         candidate = Path(self.image_path)
@@ -689,7 +594,6 @@ class SituationEntryWidget(QFrame):
                 return path.as_posix()
         return path.as_posix()
 
-
 class CurrentSituationEditor(QWidget):
     content_changed = Signal()
 
@@ -716,15 +620,44 @@ class CurrentSituationEditor(QWidget):
         root.addWidget(self.empty_label)
 
         self.entries_container = QWidget()
-        self.entries_layout = QVBoxLayout(self.entries_container)
+        self.entries_layout = QGridLayout(self.entries_container)
         self.entries_layout.setContentsMargins(0, 0, 0, 0)
         self.entries_layout.setSpacing(10)
         self.entries_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
-        self.entries_layout.addStretch(1)
+        self.entries_layout.setColumnStretch(0, 1)
+        self.entries_layout.setColumnStretch(1, 1)
         self.entries_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         root.addWidget(self.entries_container)
 
+        self.notation_container = QWidget(self)
+        notation_layout = QVBoxLayout(self.notation_container)
+        notation_layout.setContentsMargins(0, 0, 0, 0)
+        notation_layout.setSpacing(6)
+
+        notation_layout.addWidget(QLabel("Нотация *"))
+        self.notation_edit = NotationTextEdit(self)
+        notation_layout.addWidget(self.notation_edit)
+
+        self.notation_status = QLabel(
+            "Подсказка: нотация должна содержать ровно 2 непустые строки."
+        )
+        self.notation_status.setWordWrap(True)
+        self.notation_status.setStyleSheet("color: #95a1b5;")
+        notation_layout.addWidget(self.notation_status)
+
+        notation_layout.addWidget(QLabel("Текст под картинками"))
+        self.manual_edit = QPlainTextEdit(self)
+        self.manual_edit.setPlaceholderText("Введите дополнительный текст для блока текущей ситуации.")
+        self.manual_edit.setMinimumHeight(120)
+        notation_layout.addWidget(self.manual_edit)
+
+        root.addWidget(self.notation_container)
+
+        self.notation_edit.textChanged.connect(self._on_notation_changed)
+        self.manual_edit.textChanged.connect(self.content_changed)
+
         self._update_empty_state()
+        self._update_notation_feedback()
 
     def set_base_directory(self, base_dir: Path | None) -> None:
         self._base_dir = base_dir
@@ -732,16 +665,34 @@ class CurrentSituationEditor(QWidget):
             entry.set_base_dir(base_dir)
 
     def load_from_markdown(self, markdown: str) -> None:
+        parsed_entries, notation_text, manual_text = self._parse_block(markdown)
         self._clear_entries()
-        for data in self._parse_entries(markdown):
+        for data in parsed_entries:
             self._add_entry_widget(data)
+        self.notation_edit.blockSignals(True)
+        self.notation_edit.setPlainText(notation_text)
+        self.notation_edit.blockSignals(False)
+        self.manual_edit.blockSignals(True)
+        self.manual_edit.setPlainText(manual_text)
+        self.manual_edit.blockSignals(False)
         self._update_entry_titles()
         self._update_empty_state()
+        self._update_notation_feedback()
         self.content_changed.emit()
 
     def to_markdown(self) -> str:
         chunks = [entry.to_markdown(index + 1, self._base_dir) for index, entry in enumerate(self._entries)]
-        return "\n\n---\n\n".join(chunks).strip()
+        notation = self.notation_edit.toPlainText().strip()
+        manual_text = self.manual_edit.toPlainText().strip()
+
+        parts: list[str] = []
+        if chunks:
+            parts.append("\n\n".join(chunks).strip())
+        if notation:
+            parts.append(f"<!-- NOTATION\n{notation}\n-->")
+        if manual_text:
+            parts.append(manual_text)
+        return "\n\n".join(part for part in parts if part.strip()).strip()
 
     def validate_content(self) -> tuple[bool, str]:
         if not self._entries:
@@ -752,7 +703,42 @@ class CurrentSituationEditor(QWidget):
             if ok:
                 continue
             return False, f"Картинка #{index}: {error}"
+
+        notation = self.notation_edit.toPlainText().strip()
+        if not notation:
+            return False, "Заполните нотацию для блока текущей ситуации."
+
+        _text, notation_error = notation_to_text(notation)
+        if notation_error:
+            return False, f"Ошибка нотации: {notation_error}"
+
         return True, ""
+
+    def has_content(self) -> bool:
+        return bool(self._entries)
+
+    def image_widgets(self) -> list[SituationEntryWidget]:
+        return list(self._entries)
+
+    def _on_notation_changed(self) -> None:
+        self._update_notation_feedback()
+        self.content_changed.emit()
+
+    def _update_notation_feedback(self) -> None:
+        notation = self.notation_edit.toPlainText().strip()
+        if not notation:
+            self.notation_status.setStyleSheet("color: #95a1b5;")
+            self.notation_status.setText("Подсказка: нотация должна содержать ровно 2 непустые строки.")
+            return
+
+        converted, error = notation_to_text(notation)
+        if error:
+            self.notation_status.setStyleSheet("color: #ff7b72;")
+            self.notation_status.setText(f"Ошибка нотации: {error}")
+            return
+
+        self.notation_status.setStyleSheet("color: #00e676;")
+        self.notation_status.setText(f"Результат: {converted}")
 
     def _on_add_image_clicked(self) -> None:
         start_dir = str(self._base_dir) if self._base_dir else str(Path.home())
@@ -775,15 +761,15 @@ class CurrentSituationEditor(QWidget):
         entry.set_base_dir(self._base_dir)
         entry.changed.connect(self.content_changed)
         entry.remove_requested.connect(self._remove_entry_widget)
-
-        self.entries_layout.insertWidget(max(0, self.entries_layout.count() - 1), entry)
         self._entries.append(entry)
+        self._refresh_entries_layout()
 
     def _remove_entry_widget(self, widget: QWidget) -> None:
         if widget in self._entries:
             self._entries.remove(widget)
         widget.setParent(None)
         widget.deleteLater()
+        self._refresh_entries_layout()
         self._update_entry_titles()
         self._update_empty_state()
         self.content_changed.emit()
@@ -793,15 +779,26 @@ class CurrentSituationEditor(QWidget):
             widget = self._entries.pop()
             widget.setParent(None)
             widget.deleteLater()
+        self._refresh_entries_layout()
 
     def _update_entry_titles(self) -> None:
         for index, entry in enumerate(self._entries, start=1):
             entry.set_index(index)
 
+    def _refresh_entries_layout(self) -> None:
+        while self.entries_layout.count():
+            self.entries_layout.takeAt(0)
+
+        for index, entry in enumerate(self._entries):
+            row = index // 2
+            col = index % 2
+            self.entries_layout.addWidget(entry, row, col)
+
     def _update_empty_state(self) -> None:
         is_empty = len(self._entries) == 0
         self.empty_label.setVisible(is_empty)
         self.entries_container.setVisible(not is_empty)
+        self.notation_container.setVisible(not is_empty)
 
     @staticmethod
     def _parse_entries(markdown: str) -> list[SituationEntryData]:
@@ -825,34 +822,33 @@ class CurrentSituationEditor(QWidget):
                 timeframe_match = re.search(r"(?mi)^TF:\s*(.+?)\s*$", chunk)
             timeframe = timeframe_match.group(1).strip() if timeframe_match else ""
 
-            notation_match = re.search(r"(?is)<!--\s*NOTATION\s*(.*?)\s*-->", chunk)
-            notation = notation_match.group(1).strip() if notation_match else ""
-            if not notation:
-                notation_match = re.search(r"(?is)Notation:\s*\n(.*?)(?:\n\s*Text:|\Z)", chunk)
-                notation = notation_match.group(1).strip() if notation_match else ""
-
-            manual_text = ""
-            if notation_match:
-                manual_text = chunk[notation_match.end() :].strip()
-            if not manual_text:
-                text_match = re.search(r"(?is)Text:\s*\n(.*)$", chunk)
-                manual_text = text_match.group(1).strip() if text_match else ""
-
-            if not manual_text:
-                body_after_image = chunk[match.end() - start :].strip()
-                body_after_image = re.sub(r"(?mi)^TF:\s*.*$", "", body_after_image).strip()
-                body_after_image = re.sub(r"(?mi)^\*\*TF:\*\*\s*.*$", "", body_after_image).strip()
-                body_after_image = re.sub(r"(?is)Notation:\s*\n.*$", "", body_after_image).strip()
-                body_after_image = re.sub(r"(?is)<!--\s*NOTATION\s*.*?-->", "", body_after_image).strip()
-                manual_text = body_after_image.strip()
-
             entries.append(
                 SituationEntryData(
                     image_path=image_path,
                     timeframe=timeframe,
-                    notation=notation,
-                    text=manual_text,
                 )
             )
 
         return entries
+
+    @classmethod
+    def _parse_block(cls, markdown: str) -> tuple[list[SituationEntryData], str, str]:
+        text = markdown.strip()
+        if not text:
+            return [], "", ""
+
+        entries = cls._parse_entries(text)
+
+        notation = ""
+        notation_match = _NOTATION_COMMENT_RE.search(text)
+        if notation_match:
+            notation = notation_match.group(1).strip()
+
+        manual_text = _NOTATION_COMMENT_RE.sub("", text)
+        manual_text = _IMAGE_RE.sub("", manual_text)
+        manual_text = re.sub(r"(?mi)^(?:\*\*TF:\*\*|TF:)\s*.+$", "", manual_text)
+        manual_text = re.sub(r"(?mi)^---+\s*$", "", manual_text)
+        manual_text = manual_text.strip()
+
+        return entries, notation, manual_text
+

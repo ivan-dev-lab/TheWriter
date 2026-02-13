@@ -20,14 +20,28 @@ def list_markdown_files(directory: Path) -> list[PlanFileInfo]:
         return []
 
     entries: list[PlanFileInfo] = []
-    for file_path in directory.glob("*.md"):
+    seen_paths: set[Path] = set()
+
+    def add_file(file_path: Path) -> None:
         if not file_path.is_file():
-            continue
+            return
+        resolved = file_path.resolve()
+        if resolved in seen_paths:
+            return
         try:
             stat = file_path.stat()
         except OSError:
-            continue
+            return
+        seen_paths.add(resolved)
         entries.append(PlanFileInfo(path=file_path, modified_at=datetime.fromtimestamp(stat.st_mtime)))
+
+    for file_path in directory.glob("*.md"):
+        add_file(file_path)
+
+    plans_dir = directory / "Plans"
+    if plans_dir.exists() and plans_dir.is_dir():
+        for file_path in plans_dir.rglob("*.md"):
+            add_file(file_path)
 
     entries.sort(key=lambda item: (-item.modified_at.timestamp(), item.path.name.casefold()))
     return entries

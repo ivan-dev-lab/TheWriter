@@ -40,7 +40,7 @@ class AppSettings:
     autosave_periodic_ms: int = 15000
     ui_theme: str = "dark"
     sidebar_visible: bool = True
-    preview_visible: bool = True
+    preview_visible: bool = False
     sidebar_width: int = 290
     preview_size: int = 420
     preview_orientation: str = "vertical"

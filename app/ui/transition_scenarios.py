@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QCompleter,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -800,11 +801,6 @@ class TransitionScenarioImageWidget(QFrame):
         image_layout.addWidget(self.image_label)
         root.addWidget(self.image_frame)
 
-        self.path_label = QLabel(self.image_path)
-        self.path_label.setWordWrap(True)
-        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        root.addWidget(self.path_label)
-
         tf_row = QHBoxLayout()
         tf_row.addWidget(QLabel("Таймфрейм *"))
         self.timeframe_combo = QComboBox()
@@ -928,11 +924,12 @@ class TransitionScenarioWidget(QFrame):
         root.addLayout(header)
 
         self.images_container = QWidget()
-        self.images_layout = QVBoxLayout(self.images_container)
+        self.images_layout = QGridLayout(self.images_container)
         self.images_layout.setContentsMargins(0, 0, 0, 0)
         self.images_layout.setSpacing(8)
         self.images_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
-        self.images_layout.addStretch(1)
+        self.images_layout.setColumnStretch(0, 1)
+        self.images_layout.setColumnStretch(1, 1)
         root.addWidget(self.images_container)
 
         root.addWidget(QLabel("Нотация *"))
@@ -995,6 +992,9 @@ class TransitionScenarioWidget(QFrame):
             meaning_notation=self.meaning_notation_edit.text().strip(),
             why_text=self.manual_edit.toPlainText().strip(),
         )
+
+    def image_widgets(self) -> list[TransitionScenarioImageWidget]:
+        return list(self._images)
 
     def validate(self) -> tuple[bool, str]:
         if not self._images:
@@ -1120,20 +1120,30 @@ class TransitionScenarioWidget(QFrame):
         widget.set_base_dir(self._base_dir)
         widget.changed.connect(self.changed)
         widget.remove_requested.connect(self._remove_image_widget)
-        self.images_layout.insertWidget(max(0, self.images_layout.count() - 1), widget)
         self._images.append(widget)
+        self._refresh_images_layout()
 
     def _remove_image_widget(self, widget: QWidget) -> None:
         if widget in self._images:
             self._images.remove(widget)
         widget.setParent(None)
         widget.deleteLater()
+        self._refresh_images_layout()
         self._update_image_titles()
         self.changed.emit()
 
     def _update_image_titles(self) -> None:
         for index, image in enumerate(self._images, start=1):
             image.set_index(index)
+
+    def _refresh_images_layout(self) -> None:
+        while self.images_layout.count():
+            self.images_layout.takeAt(0)
+
+        for index, image in enumerate(self._images):
+            row = index // 2
+            col = index % 2
+            self.images_layout.addWidget(image, row, col)
 
     def _on_notation_changed(self) -> None:
         notation_text = self.notation_edit.text().strip()
@@ -1148,7 +1158,7 @@ class TransitionScenarioWidget(QFrame):
             return
 
         self.notation_status.setText(f"Результат: {generated}")
-        self.notation_status.setStyleSheet("color: #1f6f43;")
+        self.notation_status.setStyleSheet("color: #24d061;")
         self.changed.emit()
 
     def _on_meaning_notation_changed(self, emit_change: bool = True) -> None:
@@ -1175,7 +1185,7 @@ class TransitionScenarioWidget(QFrame):
             return
 
         self.meaning_status.setText(f"Результат: {generated}")
-        self.meaning_status.setStyleSheet("color: #1f6f43;")
+        self.meaning_status.setStyleSheet("color: #24d061;")
         if emit_change:
             self.changed.emit()
 
@@ -1352,6 +1362,15 @@ class TransitionScenariosEditor(QWidget):
     def to_markdown(self) -> str:
         chunks = [entry.to_markdown(index + 1, self._base_dir) for index, entry in enumerate(self._entries)]
         return "\n\n---\n\n".join(chunks).strip()
+
+    def has_content(self) -> bool:
+        return bool(self._entries)
+
+    def image_widgets(self) -> list[TransitionScenarioImageWidget]:
+        widgets: list[TransitionScenarioImageWidget] = []
+        for entry in self._entries:
+            widgets.extend(entry.image_widgets())
+        return widgets
 
     def scenario_choices(self) -> list[tuple[str, str]]:
         choices: list[tuple[str, str]] = []

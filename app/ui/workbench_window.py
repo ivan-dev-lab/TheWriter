@@ -5,6 +5,7 @@ from datetime import datetime
 import html
 from pathlib import Path
 import re
+import shutil
 from typing import Callable
 
 from PySide6.QtCore import QTimer, Qt, QUrl, Signal
@@ -303,7 +304,7 @@ class MainWindow(QMainWindow):
         self._apply_theme(self.settings.ui_theme, persist=False)
         self._apply_preview_orientation(self.settings.preview_orientation, persist=False)
         self._apply_sidebar_visibility(self.settings.sidebar_visible, persist=False)
-        self._apply_preview_visibility(self.settings.preview_visible, persist=False)
+        self._apply_preview_visibility(False, persist=False)
 
         if self.current_directory:
             self._refresh_file_list(show_message=False)
@@ -1054,21 +1055,23 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Проверьте блок 1", message)
             return False
 
-        ok, message = self.transition_scenarios_editor.validate_content()
-        if not ok:
-            self._set_autosave_status("Автосохранение: заполните блок 2")
-            self.statusBar().showMessage(message, 8000)
-            if explicit:
-                QMessageBox.warning(self, "Проверьте блок 2", message)
-            return False
+        if self.transition_scenarios_editor.has_content():
+            ok, message = self.transition_scenarios_editor.validate_content()
+            if not ok:
+                self._set_autosave_status("Автосохранение: заполните блок 2")
+                self.statusBar().showMessage(message, 8000)
+                if explicit:
+                    QMessageBox.warning(self, "Проверьте блок 2", message)
+                return False
 
-        ok, message = self.deal_scenarios_editor.validate_content()
-        if not ok:
-            self._set_autosave_status("Автосохранение: заполните блок 3")
-            self.statusBar().showMessage(message, 8000)
-            if explicit:
-                QMessageBox.warning(self, "Проверьте блок 3", message)
-            return False
+        if self.deal_scenarios_editor.has_content():
+            ok, message = self.deal_scenarios_editor.validate_content()
+            if not ok:
+                self._set_autosave_status("Автосохранение: заполните блок 3")
+                self.statusBar().showMessage(message, 8000)
+                if explicit:
+                    QMessageBox.warning(self, "Проверьте блок 3", message)
+                return False
         return True
 
     def _refresh_section_statuses(self) -> None:
@@ -1088,8 +1091,12 @@ class MainWindow(QMainWindow):
         self.section_deal.set_status("Заполнен" if deal_filled else "Пусто")
 
         v1, _ = self.current_situation_editor.validate_content()
-        v2, _ = self.transition_scenarios_editor.validate_content()
-        v3, _ = self.deal_scenarios_editor.validate_content()
+        v2 = True
+        if self.transition_scenarios_editor.has_content():
+            v2, _ = self.transition_scenarios_editor.validate_content()
+        v3 = True
+        if self.deal_scenarios_editor.has_content():
+            v3, _ = self.deal_scenarios_editor.validate_content()
         self.validation_status_label.setText("Валидность: OK" if (v1 and v2 and v3) else "Валидность: ошибки")
 
     def _refresh_context_status(self) -> None:
@@ -1249,8 +1256,9 @@ class MainWindow(QMainWindow):
         self.current_file = path
         self.current_draft_path = None
         self.current_plan = plan
-        self.current_directory = path.parent
-        self.settings.last_directory = str(path.parent)
+        root_dir = self._resolve_root_directory_from_plan_path(path)
+        self.current_directory = root_dir
+        self.settings.last_directory = str(root_dir)
         self.settings.last_open_file = str(path)
         self.settings.touch_recent_file(str(path))
         self.settings.save()
@@ -1377,6 +1385,149 @@ class MainWindow(QMainWindow):
             return False
         return True
 
+    @staticmethod
+    def _sanitize_plan_folder_name(name: str) -> str:
+        cleaned = re.sub(r"[\\/:*?\"<>|]+", "_", name).strip(". ")
+        return cleaned or "plan"
+
+    @staticmethod
+    def _resolve_root_directory_from_plan_path(path: Path) -> Path:
+        current = path.parent
+        while True:
+            if current.name.casefold() == "plans" and current.parent != current:
+                return current.parent
+            if current.parent == current:
+                break
+            current = current.parent
+        return path.parent
+
+    def _derive_structured_plan_path(self) -> Path | None:
+        if not self._editor_in_structured_mode():
+            return None
+
+        root_dir = self.current_directory
+        if root_dir is None and self.current_file is not None:
+            root_dir = self._resolve_root_directory_from_plan_path(self.current_file)
+        if root_dir is None and self.settings.last_directory:
+            candidate = Path(self.settings.last_directory)
+            if candidate.exists() and candidate.is_dir():
+                root_dir = candidate
+        if root_dir is None:
+            return None
+
+        plan_name = self._sanitize_plan_folder_name(self.title_edit.text().strip() or "plan")
+        return root_dir / "Plans" / plan_name / f"{plan_name}.md"
+
+    def _all_image_widgets(self) -> list[object]:
+        return [
+            *self.current_situation_editor.image_widgets(),
+            *self.transition_scenarios_editor.image_widgets(),
+            *self.deal_scenarios_editor.image_widgets(),
+        ]
+
+    def _remap_image_paths_after_plan_move(self, old_folder: Path, new_folder: Path) -> None:
+        old_resolved = old_folder.resolve()
+        for widget in self._all_image_widgets():
+            raw_path = getattr(widget, "image_path", "")
+            if not raw_path:
+                continue
+            candidate = Path(raw_path)
+            if not candidate.is_absolute():
+                continue
+            try:
+                relative = candidate.resolve().relative_to(old_resolved)
+            except (OSError, ValueError):
+                continue
+            widget.image_path = str(new_folder / relative)
+            widget._update_image_preview()
+
+    def _maybe_rename_plan_structure(self, target_path: Path) -> Path:
+        if self.current_file is None or self.current_file == target_path:
+            return target_path
+
+        current_path = self.current_file
+        if (
+            current_path.parent.parent.name.casefold() != "plans"
+            or target_path.parent.parent.name.casefold() != "plans"
+            or current_path.parent.parent != target_path.parent.parent
+        ):
+            return target_path
+
+        old_folder = current_path.parent
+        new_folder = target_path.parent
+
+        if old_folder != new_folder:
+            if old_folder.exists() and not new_folder.exists():
+                old_folder.rename(new_folder)
+                self._remap_image_paths_after_plan_move(old_folder=old_folder, new_folder=new_folder)
+            current_path = new_folder / current_path.name
+
+        if current_path != target_path and current_path.exists() and not target_path.exists():
+            current_path.rename(target_path)
+
+        self.current_file = target_path
+        return target_path
+
+    @staticmethod
+    def _copy_image_to_plan_folder(source: Path, target_dir: Path) -> Path:
+        source_path = source.resolve()
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        candidate = target_dir / source_path.name
+        stem = source_path.stem or "image"
+        suffix = source_path.suffix
+
+        if candidate.exists():
+            try:
+                if candidate.resolve() == source_path:
+                    return candidate
+            except OSError:
+                pass
+
+            index = 2
+            while True:
+                candidate = target_dir / f"{stem}_{index}{suffix}"
+                if not candidate.exists():
+                    break
+                try:
+                    if candidate.resolve() == source_path:
+                        return candidate
+                except OSError:
+                    pass
+                index += 1
+
+        try:
+            if candidate.resolve() == source_path:
+                return candidate
+        except OSError:
+            pass
+
+        shutil.copy2(source_path, candidate)
+        return candidate
+
+    def _sync_plan_images_into_directory(self, target_path: Path) -> None:
+        if not self._editor_in_structured_mode():
+            return
+
+        folder_name = self._sanitize_plan_folder_name(target_path.stem)
+        if (
+            target_path.parent.parent.name.casefold() == "plans"
+            and target_path.parent.name.casefold() == folder_name.casefold()
+        ):
+            images_dir = target_path.parent
+        else:
+            images_dir = target_path.parent / "Plans" / folder_name
+        images_dir.mkdir(parents=True, exist_ok=True)
+
+        widgets = self._all_image_widgets()
+        for widget in widgets:
+            source = widget._resolve_image_path()
+            if not source.exists() or source.is_dir():
+                continue
+            copied_path = self._copy_image_to_plan_folder(source, images_dir)
+            widget.image_path = str(copied_path)
+            widget._update_image_preview()
+
     def _save_internal(self, explicit: bool, save_as: bool = False, autosave: bool = False) -> bool:
         if not self._validate_image_text_rules(explicit=explicit):
             return False
@@ -1386,12 +1537,27 @@ class MainWindow(QMainWindow):
             target_path = self._ask_save_path()
             if not target_path:
                 return False
+        elif explicit and self._editor_in_structured_mode():
+            derived_path = self._derive_structured_plan_path()
+            if derived_path is not None:
+                target_path = derived_path
+            elif self.current_file:
+                target_path = self.current_file
+            else:
+                target_path = self._ask_save_path()
+                if not target_path:
+                    return False
         elif self.current_file:
             target_path = self.current_file
         elif autosave:
-            if self.current_draft_path is None:
-                self.current_draft_path = build_draft_path(self.current_directory)
-            target_path = self.current_draft_path
+            if self._editor_in_structured_mode():
+                derived_path = self._derive_structured_plan_path()
+                if derived_path is not None:
+                    target_path = derived_path
+            if target_path is None:
+                if self.current_draft_path is None:
+                    self.current_draft_path = build_draft_path(self.current_directory)
+                target_path = self.current_draft_path
         elif explicit:
             target_path = self._ask_save_path()
             if not target_path:
@@ -1401,7 +1567,49 @@ class MainWindow(QMainWindow):
                 self.current_draft_path = build_draft_path(self.current_directory)
             target_path = self.current_draft_path
 
+        if target_path is None:
+            return False
+
+        if (
+            explicit
+            and self._editor_in_structured_mode()
+            and self.current_file is not None
+            and target_path != self.current_file
+            and target_path.exists()
+        ):
+            QMessageBox.warning(
+                self,
+                "Сохранение",
+                "План с таким именем уже существует. Выберите другое название плана.",
+            )
+            return False
+
+        if explicit and self._editor_in_structured_mode():
+            try:
+                target_path = self._maybe_rename_plan_structure(target_path)
+            except OSError as exc:
+                self._set_autosave_status("Автосохранение: ошибка переименования")
+                self.statusBar().showMessage(f"Ошибка переименования плана: {exc}", 7000)
+                QMessageBox.critical(
+                    self,
+                    "Ошибка переименования плана",
+                    f"Не удалось переименовать папку/файл плана:\n{exc}",
+                )
+                return False
+
         if self._editor_in_structured_mode():
+            try:
+                self._sync_plan_images_into_directory(target_path)
+            except OSError as exc:
+                self._set_autosave_status("Автосохранение: ошибка копирования")
+                self.statusBar().showMessage(f"Ошибка копирования изображений: {exc}", 7000)
+                if explicit:
+                    QMessageBox.critical(
+                        self,
+                        "Ошибка копирования изображений",
+                        f"Не удалось скопировать изображения плана:\n{exc}",
+                    )
+                return False
             base_dir = target_path.parent if target_path else self._current_preview_base_dir()
             self.current_situation_editor.set_base_directory(base_dir)
             self.transition_scenarios_editor.set_base_directory(base_dir)
@@ -1419,7 +1627,7 @@ class MainWindow(QMainWindow):
         if save_as or explicit:
             self.current_file = target_path
             self.current_draft_path = None
-            self.current_directory = target_path.parent
+            self.current_directory = self._resolve_root_directory_from_plan_path(target_path)
             self.settings.last_directory = str(self.current_directory)
             self.settings.last_open_file = str(target_path)
             self.settings.touch_recent_file(str(target_path))
@@ -1427,7 +1635,18 @@ class MainWindow(QMainWindow):
             self._sync_structured_editors_base_dir()
             self._refresh_file_list(show_message=False)
         elif autosave and self.current_file is None:
-            self.current_draft_path = target_path
+            if self._editor_in_structured_mode() and target_path.suffix.lower() == ".md" and not target_path.name.startswith("_draft_"):
+                self.current_file = target_path
+                self.current_draft_path = None
+                self.current_directory = self._resolve_root_directory_from_plan_path(target_path)
+                self.settings.last_directory = str(self.current_directory)
+                self.settings.last_open_file = str(target_path)
+                self.settings.touch_recent_file(str(target_path))
+                self.settings.save()
+                self._sync_structured_editors_base_dir()
+                self._refresh_file_list(show_message=False)
+            else:
+                self.current_draft_path = target_path
         elif self.current_file is not None:
             self.settings.last_open_file = str(self.current_file)
 
@@ -1518,8 +1737,8 @@ class MainWindow(QMainWindow):
         pattern = re.compile(r"(?is)<p>\s*<strong>([^<]+?)</strong>\s*(.*?)\s*</p>")
 
         def _replace(match: re.Match[str]) -> str:
-            label = match.group(1).strip()
-            value = match.group(2).strip()
+            label = re.sub(r"\s*:+\s*$", "", match.group(1).strip())
+            value = re.sub(r"^\s*:\s*", "", match.group(2).strip())
             if not value:
                 return f'<div class="kv-block"><div class="kv-label"><strong>{label}</strong></div></div>'
             return (

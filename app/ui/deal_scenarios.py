@@ -132,11 +132,6 @@ class DealScenarioWidget(QFrame):
         image_layout.addWidget(self.image_label)
         root.addWidget(self.image_frame)
 
-        self.path_label = QLabel("")
-        self.path_label.setWordWrap(True)
-        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        root.addWidget(self.path_label)
-
         tf_row = QHBoxLayout()
         tf_row.addWidget(QLabel("Таймфрейм *"))
         self.timeframe_combo = QComboBox()
@@ -168,7 +163,6 @@ class DealScenarioWidget(QFrame):
         self._add_text_field(root, "TP: Почему именно так? Это оптимальная цель? Обосновать", self.tp_edit)
 
         self.image_path = data.image_path
-        self.path_label.setText(data.image_path)
         if data.timeframe:
             index = self.timeframe_combo.findData(data.timeframe)
             if index >= 0:
@@ -410,6 +404,12 @@ class DealScenariosEditor(QWidget):
                 continue
             return False, f"Сделка #{index}: {error}"
         return True, ""
+
+    def has_content(self) -> bool:
+        return bool(self._entries)
+
+    def image_widgets(self) -> list[DealScenarioWidget]:
+        return list(self._entries)
 
     def _on_add_image_clicked(self) -> None:
         start_dir = str(self._base_dir) if self._base_dir else str(Path.home())
