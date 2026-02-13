@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -6,9 +6,8 @@ import html
 from pathlib import Path
 import re
 import shutil
-from typing import Callable
 
-from PySide6.QtCore import QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -33,7 +32,7 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QStyle,
     QTabBar,
-    QTextBrowser,
+    QButtonGroup,
     QToolBar,
     QToolButton,
     QVBoxLayout,
@@ -202,61 +201,15 @@ class CollapsibleSection(QFrame):
         self.toggled.emit(checked)
 
 
-class DetachedPreviewWindow(QMainWindow):
-    closed = Signal()
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Markdown Preview")
-        self.resize(900, 700)
-        self.preview_browser = QTextBrowser(self)
-        self.setCentralWidget(self.preview_browser)
-
-    def set_preview_html(self, html_content: str, base_dir: Path | None) -> None:
-        if base_dir:
-            self.preview_browser.document().setBaseUrl(QUrl.fromLocalFile(str(base_dir) + "/"))
-        self.preview_browser.setHtml(html_content)
-
-    def closeEvent(self, event) -> None:  # type: ignore[override]
-        self.closed.emit()
-        super().closeEvent(event)
-
-
-class PlanReadOnlyWindow(QMainWindow):
-    closed = Signal(QMainWindow)
-
-    def __init__(self, render_html: Callable[[str, str], str], parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.resize(980, 760)
-        self.preview_browser = QTextBrowser(self)
-        self.setCentralWidget(self.preview_browser)
-        self._render_html = render_html
-        self._markdown_text = ""
-        self._base_dir: Path | None = None
-        self._render_mode = "notion-layout"
-
-    def set_plan_content(self, title: str, markdown_text: str, base_dir: Path | None) -> None:
-        self.setWindowTitle(f"Просмотр плана: {title}")
-        self._markdown_text = markdown_text
-        self._base_dir = base_dir
-        self.refresh_theme()
-
-    def refresh_theme(self) -> None:
-        html_content = self._render_html(self._markdown_text, "notion-layout")
-        if self._base_dir:
-            self.preview_browser.document().setBaseUrl(QUrl.fromLocalFile(str(self._base_dir) + "/"))
-        self.preview_browser.setHtml(html_content)
-
-    def closeEvent(self, event) -> None:  # type: ignore[override]
-        self.closed.emit(self)
-        super().closeEvent(event)
-
-
 class MainWindow(QMainWindow):
     SIDEBAR_COLLAPSE_WIDTH = 120
     SIDEBAR_DEFAULT_WIDTH = 290
-    PREVIEW_COLLAPSE_SIZE = 170
-    PREVIEW_DEFAULT_SIZE = 420
+
+    @staticmethod
+    def _normalize_root_directory(directory: Path) -> Path:
+        if directory.name.casefold() == "plans" and directory.parent != directory:
+            return directory.parent
+        return directory
 
     def __init__(self) -> None:
         super().__init__()
@@ -267,7 +220,7 @@ class MainWindow(QMainWindow):
         if self.settings.last_directory:
             candidate = Path(self.settings.last_directory)
             if candidate.exists() and candidate.is_dir():
-                self.current_directory = candidate
+                self.current_directory = self._normalize_root_directory(candidate)
 
         self.current_file: Path | None = None
         self.current_draft_path: Path | None = None
@@ -275,10 +228,8 @@ class MainWindow(QMainWindow):
         self.file_cache: list[PlanFileInfo] = []
         self._updating = False
         self._sidebar_last_width = self.settings.sidebar_width or self.SIDEBAR_DEFAULT_WIDTH
-        self._preview_last_size = self.settings.preview_size or self.PREVIEW_DEFAULT_SIZE
-        self.detached_preview_window: DetachedPreviewWindow | None = None
-        self.plan_read_windows: list[PlanReadOnlyWindow] = []
         self._sidebar_mode = "plans"
+        self._editor_mode = "edit"
 
         self.setWindowTitle("TheWriter - Торговые планы[*]")
         self.setMinimumSize(1260, 780)
@@ -296,15 +247,8 @@ class MainWindow(QMainWindow):
         self.autosave.dirty_changed.connect(self.setWindowModified)
         self.autosave.dirty_changed.connect(lambda _dirty: self._update_editor_tab_caption())
 
-        self._preview_timer = QTimer(self)
-        self._preview_timer.setSingleShot(True)
-        self._preview_timer.setInterval(180)
-        self._preview_timer.timeout.connect(self._update_preview)
-
         self._apply_theme(self.settings.ui_theme, persist=False)
-        self._apply_preview_orientation(self.settings.preview_orientation, persist=False)
         self._apply_sidebar_visibility(self.settings.sidebar_visible, persist=False)
-        self._apply_preview_visibility(False, persist=False)
 
         if self.current_directory:
             self._refresh_file_list(show_message=False)
@@ -318,6 +262,7 @@ class MainWindow(QMainWindow):
 
         if not opened_last:
             self._load_plan_into_ui(TradingPlan.empty())
+        self._apply_editor_mode("edit", emit_change=False)
         self._update_file_status_label()
         self._refresh_section_statuses()
         self._refresh_context_status()
@@ -354,25 +299,9 @@ class MainWindow(QMainWindow):
         self.toggle_sidebar_action.setShortcut(QKeySequence("Ctrl+B"))
         self.toggle_sidebar_action.toggled.connect(self._toggle_sidebar)
 
-        self.toggle_preview_action = QAction("Показать превью", self)
-        self.toggle_preview_action.setCheckable(True)
-        self.toggle_preview_action.setChecked(True)
-        self.toggle_preview_action.setShortcut(QKeySequence("Ctrl+Alt+P"))
-        self.toggle_preview_action.toggled.connect(self._toggle_preview)
-
-        self.toggle_split_action = QAction("Переключить split", self)
-        self.toggle_split_action.setShortcut(QKeySequence("Ctrl+\\"))
-        self.toggle_split_action.triggered.connect(self._toggle_preview_orientation)
-
         self.toggle_theme_action = QAction("Переключить тему", self)
         self.toggle_theme_action.setShortcut(QKeySequence("Ctrl+Alt+T"))
         self.toggle_theme_action.triggered.connect(self._toggle_theme)
-
-        self.open_detached_preview_action = QAction("Превью в отдельном окне", self)
-        self.open_detached_preview_action.setCheckable(True)
-        self.open_detached_preview_action.setChecked(False)
-        self.open_detached_preview_action.setShortcut(QKeySequence("Ctrl+Shift+W"))
-        self.open_detached_preview_action.toggled.connect(self._toggle_detached_preview)
 
         self.command_palette_action = QAction("Командная палитра", self)
         self.command_palette_action.setShortcut(QKeySequence("Ctrl+Shift+P"))
@@ -506,12 +435,6 @@ class MainWindow(QMainWindow):
         self.theme_combo.addItem("Light", "light")
         settings_layout.addWidget(self.theme_combo)
 
-        settings_layout.addWidget(QLabel("Split превью"))
-        self.orientation_combo = QComboBox(settings_page)
-        self.orientation_combo.addItem("Vertical", "vertical")
-        self.orientation_combo.addItem("Horizontal", "horizontal")
-        settings_layout.addWidget(self.orientation_combo)
-
         quick_hint = QLabel("Ctrl+P - Quick Open\nCtrl+Shift+P - Command Palette")
         quick_hint.setObjectName("muted")
         quick_hint.setWordWrap(True)
@@ -534,18 +457,13 @@ class MainWindow(QMainWindow):
 
         self.content_splitter = QSplitter(Qt.Orientation.Horizontal, shell)
         self.content_splitter.setChildrenCollapsible(True)
-        self.content_splitter.setCollapsible(0, False)
-        self.content_splitter.setCollapsible(1, True)
-        self.content_splitter.setStretchFactor(0, 1)
-        self.content_splitter.setStretchFactor(1, 0)
-        self.content_splitter.splitterMoved.connect(self._on_content_splitter_moved)
         layout.addWidget(self.content_splitter, 1)
 
         self.editor_panel = self._build_editor_panel()
-        self.preview_panel = self._build_preview_panel()
         self.content_splitter.addWidget(self.editor_panel)
-        self.content_splitter.addWidget(self.preview_panel)
-        self.content_splitter.setSizes([900, self._preview_last_size])
+        self.content_splitter.setCollapsible(0, False)
+        self.content_splitter.setStretchFactor(0, 1)
+        self.content_splitter.setSizes([900])
         return shell
 
     def _build_title_toolbar(self) -> QToolBar:
@@ -561,11 +479,34 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.refresh_action)
         toolbar.addSeparator()
         toolbar.addAction(self.toggle_sidebar_action)
-        toolbar.addAction(self.toggle_preview_action)
-        toolbar.addAction(self.toggle_split_action)
+        toolbar.addSeparator()
+        mode_switcher = QWidget(toolbar)
+        mode_layout = QHBoxLayout(mode_switcher)
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+        mode_layout.setSpacing(6)
+
+        self.edit_mode_button = QToolButton(mode_switcher)
+        self.edit_mode_button.setText("Режим редактирования")
+        self.edit_mode_button.setCheckable(True)
+        self.edit_mode_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.edit_mode_button.clicked.connect(lambda: self._apply_editor_mode("edit"))
+
+        self.read_mode_button = QToolButton(mode_switcher)
+        self.read_mode_button.setText("Режим чтения")
+        self.read_mode_button.setCheckable(True)
+        self.read_mode_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.read_mode_button.clicked.connect(lambda: self._apply_editor_mode("read"))
+
+        self.mode_group = QButtonGroup(mode_switcher)
+        self.mode_group.setExclusive(True)
+        self.mode_group.addButton(self.edit_mode_button)
+        self.mode_group.addButton(self.read_mode_button)
+
+        mode_layout.addWidget(self.edit_mode_button)
+        mode_layout.addWidget(self.read_mode_button)
+        toolbar.addWidget(mode_switcher)
         toolbar.addSeparator()
         toolbar.addAction(self.toggle_theme_action)
-        toolbar.addAction(self.open_detached_preview_action)
         return toolbar
 
     def _build_editor_panel(self) -> QWidget:
@@ -649,22 +590,32 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.raw_editor, 1)
         return page
 
-    def _build_preview_panel(self) -> QWidget:
-        panel = QFrame(self)
-        panel.setObjectName("editorSurface")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(8)
+    def _apply_editor_mode(self, mode: str, emit_change: bool = True) -> None:
+        normalized = "read" if mode == "read" else "edit"
+        self._editor_mode = normalized
+        is_read = normalized == "read"
 
-        header = QHBoxLayout()
-        self.preview_title = QLabel("Markdown Preview")
-        header.addWidget(self.preview_title)
-        header.addStretch(1)
-        layout.addLayout(header)
+        if hasattr(self, "edit_mode_button"):
+            self.edit_mode_button.blockSignals(True)
+            self.edit_mode_button.setChecked(not is_read)
+            self.edit_mode_button.blockSignals(False)
+        if hasattr(self, "read_mode_button"):
+            self.read_mode_button.blockSignals(True)
+            self.read_mode_button.setChecked(is_read)
+            self.read_mode_button.blockSignals(False)
 
-        self.preview_browser = QTextBrowser(panel)
-        layout.addWidget(self.preview_browser, 1)
-        return panel
+        if hasattr(self, "current_situation_editor"):
+            self.current_situation_editor.set_read_mode(is_read)
+        if hasattr(self, "transition_scenarios_editor"):
+            self.transition_scenarios_editor.set_read_mode(is_read)
+        if hasattr(self, "deal_scenarios_editor"):
+            self.deal_scenarios_editor.set_read_mode(is_read)
+        if hasattr(self, "title_edit"):
+            self.title_edit.setReadOnly(is_read)
+
+        if emit_change:
+            self._refresh_section_statuses()
+            self.statusBar().showMessage("Режим чтения" if is_read else "Режим редактирования", 1500)
 
     def _build_status_bar(self) -> None:
         status_bar = QStatusBar(self)
@@ -699,7 +650,6 @@ class MainWindow(QMainWindow):
         self.normalize_button.clicked.connect(self._normalize_raw_document)
 
         self.theme_combo.currentIndexChanged.connect(self._theme_from_settings_panel)
-        self.orientation_combo.currentIndexChanged.connect(self._orientation_from_settings_panel)
 
     def _set_sidebar_mode(self, mode: str) -> None:
         self._sidebar_mode = mode
@@ -717,10 +667,6 @@ class MainWindow(QMainWindow):
         if isinstance(theme, str):
             self._apply_theme(theme)
 
-    def _orientation_from_settings_panel(self) -> None:
-        orientation = self.orientation_combo.currentData()
-        if isinstance(orientation, str):
-            self._apply_preview_orientation(orientation)
 
     def _toggle_theme(self) -> None:
         next_theme = "light" if self.settings.ui_theme == "dark" else "dark"
@@ -742,8 +688,6 @@ class MainWindow(QMainWindow):
 
         self.setStyleSheet(build_app_stylesheet(tokens))
         self._update_preview()
-        for window in self.plan_read_windows:
-            window.refresh_theme()
         if persist:
             self.settings.save()
 
@@ -787,99 +731,13 @@ class MainWindow(QMainWindow):
         self._sidebar_last_width = sidebar_width
         self.settings.sidebar_width = int(sidebar_width)
 
-    def _toggle_preview(self, visible: bool) -> None:
-        self._apply_preview_visibility(visible)
-        self._update_toggle_icons()
-
-    def _apply_preview_visibility(self, visible: bool, persist: bool = True) -> None:
-        self.settings.preview_visible = visible
-        if visible:
-            self.preview_panel.show()
-            total = max(540, self._splitter_span())
-            size = max(self.PREVIEW_COLLAPSE_SIZE + 30, self._preview_last_size)
-            size = min(size, total - 260)
-            self._set_splitter_sizes(size)
-            self._schedule_preview_refresh()
-        else:
-            current = self._preview_current_size()
-            if current > self.PREVIEW_COLLAPSE_SIZE:
-                self._preview_last_size = current
-            self.preview_panel.hide()
-            self._set_splitter_sizes(0)
-
-        if persist:
-            self.settings.preview_size = int(self._preview_last_size)
-            self.settings.save()
-
-    def _toggle_preview_orientation(self) -> None:
-        next_orientation = "horizontal" if self.settings.preview_orientation == "vertical" else "vertical"
-        self._apply_preview_orientation(next_orientation)
-
-    def _apply_preview_orientation(self, orientation_name: str, persist: bool = True) -> None:
-        qt_orientation = Qt.Orientation.Horizontal if orientation_name == "vertical" else Qt.Orientation.Vertical
-        self.content_splitter.setOrientation(qt_orientation)
-        self.settings.preview_orientation = orientation_name
-
-        idx = self.orientation_combo.findData(orientation_name)
-        if idx >= 0 and self.orientation_combo.currentIndex() != idx:
-            self.orientation_combo.blockSignals(True)
-            self.orientation_combo.setCurrentIndex(idx)
-            self.orientation_combo.blockSignals(False)
-
-        if self.settings.preview_visible:
-            self._set_splitter_sizes(self._preview_last_size)
-        else:
-            self._set_splitter_sizes(0)
-
-        if persist:
-            self.settings.save()
-
-    def _on_content_splitter_moved(self, _: int, __: int) -> None:
-        if not self.toggle_preview_action.isChecked():
-            return
-        size = self._preview_current_size()
-        if size <= self.PREVIEW_COLLAPSE_SIZE:
-            self.toggle_preview_action.blockSignals(True)
-            self.toggle_preview_action.setChecked(False)
-            self.toggle_preview_action.blockSignals(False)
-            self._apply_preview_visibility(False)
-            self._update_toggle_icons()
-            return
-
-        self._preview_last_size = size
-        self.settings.preview_size = int(size)
-
-    def _preview_current_size(self) -> int:
-        sizes = self.content_splitter.sizes()
-        if len(sizes) < 2:
-            return self._preview_last_size
-        return sizes[1]
-
-    def _splitter_span(self) -> int:
-        if self.content_splitter.orientation() == Qt.Orientation.Horizontal:
-            return max(540, self.content_splitter.width())
-        return max(540, self.content_splitter.height())
-
-    def _set_splitter_sizes(self, preview_size: int) -> None:
-        total = self._splitter_span()
-        preview_size = max(0, min(preview_size, total - 200))
-        editor_size = max(200, total - preview_size)
-        self.content_splitter.setSizes([editor_size, preview_size])
-
     def _update_toggle_icons(self) -> None:
         if self.toggle_sidebar_action.isChecked():
             self.toggle_sidebar_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowLeft))
         else:
             self.toggle_sidebar_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight))
 
-        if self.toggle_preview_action.isChecked():
-            self.toggle_preview_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight))
-        else:
-            self.toggle_preview_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowLeft))
-
-        self.toggle_split_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ToolBarHorizontalExtensionButton))
         self.toggle_theme_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DesktopIcon))
-        self.open_detached_preview_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarMaxButton))
 
     def _show_file_context_menu(self, pos) -> None:
         item = self.file_list.itemAt(pos)
@@ -891,7 +749,6 @@ class MainWindow(QMainWindow):
         path = Path(file_path)
         menu = QMenu(self)
         open_action = menu.addAction("Открыть")
-        open_readonly_action = menu.addAction("Открыть для просмотра")
         rename_action = menu.addAction("Переименовать")
         delete_action = menu.addAction("Удалить")
         menu.addSeparator()
@@ -902,9 +759,6 @@ class MainWindow(QMainWindow):
         if selected == open_action:
             if self._ensure_saved_before_navigation():
                 self._open_file(path)
-            return
-        if selected == open_readonly_action:
-            self._open_plan_read_only(path)
             return
         if selected == rename_action:
             self._rename_plan(path)
@@ -976,10 +830,7 @@ class MainWindow(QMainWindow):
             QuickPickItem("Сохранить", "Ctrl+S", self._save),
             QuickPickItem("Сохранить как...", "Ctrl+Shift+S", self._save_as),
             QuickPickItem("Обновить список", "F5", self._refresh_file_list),
-            QuickPickItem("Открыть выбранный план для просмотра", "Explorer", self._open_selected_plan_read_only),
-            QuickPickItem("Показать/скрыть preview", "Ctrl+Alt+P", lambda: self.toggle_preview_action.trigger()),
             QuickPickItem("Показать/скрыть sidebar", "Ctrl+B", lambda: self.toggle_sidebar_action.trigger()),
-            QuickPickItem("Переключить split", "Ctrl+\\", self._toggle_preview_orientation),
             QuickPickItem("Переключить тему", "Ctrl+Alt+T", self._toggle_theme),
         ]
         dialog = QuickPickDialog("Command Palette", "Введите команду...", commands, self)
@@ -1022,26 +873,6 @@ class MainWindow(QMainWindow):
             return
         if self._ensure_saved_before_navigation():
             self._open_file(payload)
-
-    def _toggle_detached_preview(self, visible: bool) -> None:
-        if visible:
-            if self.detached_preview_window is None:
-                self.detached_preview_window = DetachedPreviewWindow(self)
-                self.detached_preview_window.closed.connect(self._on_detached_preview_closed)
-            self.detached_preview_window.show()
-            self.detached_preview_window.raise_()
-            self.detached_preview_window.activateWindow()
-            self._schedule_preview_refresh()
-            return
-
-        if self.detached_preview_window is not None:
-            self.detached_preview_window.close()
-
-    def _on_detached_preview_closed(self) -> None:
-        self.detached_preview_window = None
-        self.open_detached_preview_action.blockSignals(True)
-        self.open_detached_preview_action.setChecked(False)
-        self.open_detached_preview_action.blockSignals(False)
 
     def _validate_image_text_rules(self, explicit: bool) -> bool:
         if not self._editor_in_structured_mode():
@@ -1126,7 +957,7 @@ class MainWindow(QMainWindow):
 
     def _update_file_status_label(self) -> None:
         if self.current_file:
-            self.file_status_label.setText(f"Файл: {self.current_file}")
+            self.file_status_label.setText(f"Р¤Р°Р№Р»: {self.current_file}")
             return
         if self.current_draft_path:
             self.file_status_label.setText(f"Черновик: {self.current_draft_path}")
@@ -1161,7 +992,7 @@ class MainWindow(QMainWindow):
         return self.editor_stack.currentWidget() is self.structured_page
 
     def _schedule_preview_refresh(self) -> None:
-        self._preview_timer.start()
+        return
 
     def _on_editor_changed(self) -> None:
         if self._updating:
@@ -1182,7 +1013,7 @@ class MainWindow(QMainWindow):
         if not selected:
             return
 
-        self.current_directory = Path(selected)
+        self.current_directory = self._normalize_root_directory(Path(selected))
         self.settings.last_directory = str(self.current_directory)
         self.settings.save()
         self._sync_structured_editors_base_dir()
@@ -1196,9 +1027,11 @@ class MainWindow(QMainWindow):
             self.file_cache = []
             return
 
-        self.folder_label.setText(f"Папка: {self.current_directory}")
+        plans_dir = self.current_directory / "Plans"
+        plans_dir.mkdir(parents=True, exist_ok=True)
+        self.folder_label.setText(f"Папка: {plans_dir}")
         try:
-            self.file_cache = list_markdown_files(self.current_directory)
+            self.file_cache = list_markdown_files(plans_dir)
         except OSError as exc:
             QMessageBox.critical(self, "Ошибка чтения папки", f"Не удалось прочитать папку:\n{exc}")
             self.file_cache = []
@@ -1307,6 +1140,7 @@ class MainWindow(QMainWindow):
         self._update_editor_tab_caption()
         self._refresh_section_statuses()
         self._refresh_context_status()
+        self._apply_editor_mode(self._editor_mode, emit_change=False)
         self._update_preview()
 
     def _new_plan(self) -> None:
@@ -1842,7 +1676,7 @@ class MainWindow(QMainWindow):
         tf_label = panel.timeframe.strip().upper() if panel.timeframe.strip() else "N/A"
         chunks: list[str] = [
             '<article class="tf-panel">',
-            f'<div class="tf-panel-header"><span class="tf-icon">◷</span><span>TF -> {html.escape(tf_label)}</span></div>',
+            f'<div class="tf-panel-header"><span class="tf-icon">в—·</span><span>TF -> {html.escape(tf_label)}</span></div>',
             '<div class="tf-panel-body">',
         ]
 
@@ -1956,35 +1790,6 @@ class MainWindow(QMainWindow):
             + "</div></div></body></html>"
         )
 
-    def _open_plan_read_only(self, path: Path) -> None:
-        try:
-            markdown = read_markdown(path)
-        except OSError as exc:
-            QMessageBox.critical(self, "Ошибка чтения файла", f"Не удалось открыть файл для просмотра:\n{path}\n\n{exc}")
-            return
-
-        window = PlanReadOnlyWindow(self._render_markdown_to_html, self)
-        window.closed.connect(self._on_plan_read_window_closed)
-        window.set_plan_content(path.name, markdown, path.parent)
-        window.show()
-        window.raise_()
-        window.activateWindow()
-        self.plan_read_windows.append(window)
-
-    def _open_selected_plan_read_only(self) -> None:
-        item = self.file_list.currentItem()
-        if item is None:
-            QMessageBox.information(self, "Просмотр плана", "Сначала выберите файл плана в списке.")
-            return
-        file_path = item.data(Qt.ItemDataRole.UserRole)
-        if not file_path:
-            QMessageBox.information(self, "Просмотр плана", "Выбранный элемент не является файлом плана.")
-            return
-        self._open_plan_read_only(Path(file_path))
-
-    def _on_plan_read_window_closed(self, window: QMainWindow) -> None:
-        self.plan_read_windows = [item for item in self.plan_read_windows if item is not window]
-
     def _preview_markdown(self) -> str:
         markdown, _ = self._compose_current_markdown()
         # Hide metadata comments in preview so text appears immediately under media.
@@ -1996,32 +1801,12 @@ class MainWindow(QMainWindow):
         return self.current_file.parent if self.current_file else self.current_directory
 
     def _update_preview(self) -> None:
-        has_side_preview = self.toggle_preview_action.isChecked() and self.preview_panel.isVisible()
-        has_detached_preview = (
-            self.open_detached_preview_action.isChecked() and self.detached_preview_window is not None
-        )
-        if not has_side_preview and not has_detached_preview:
-            return
-
-        markdown = self._preview_markdown()
-        rendered = self._render_markdown_to_html(markdown)
-
-        base_dir = self._current_preview_base_dir()
-        if has_side_preview and base_dir:
-            self.preview_browser.document().setBaseUrl(QUrl.fromLocalFile(str(base_dir) + "/"))
-        if has_side_preview:
-            self.preview_browser.setHtml(rendered)
-        if has_detached_preview and self.detached_preview_window is not None:
-            self.detached_preview_window.set_preview_html(rendered, base_dir)
+        return
 
     def _persist_ui_state(self) -> None:
         self.settings.sidebar_visible = self.toggle_sidebar_action.isChecked()
-        self.settings.preview_visible = self.toggle_preview_action.isChecked()
         self.settings.sidebar_width = int(self._sidebar_last_width)
-        self.settings.preview_size = int(self._preview_last_size)
-        self.settings.preview_orientation = "vertical" if (
-            self.content_splitter.orientation() == Qt.Orientation.Horizontal
-        ) else "horizontal"
+        self.settings.preview_visible = False
         self.settings.last_directory = str(self.current_directory) if self.current_directory else ""
         self.settings.last_open_file = str(self.current_file) if self.current_file else ""
         self.settings.save()

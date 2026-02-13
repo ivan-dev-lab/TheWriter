@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 
@@ -10,8 +10,10 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from .current_situation import TIMEFRAME_OPTIONS
+from .image_clipboard import image_path_from_clipboard
 
 _IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
 _TRANSITION_REF_RE = re.compile(r"(?mi)^\*\*Сценарий перехода:\*\*\s*(.+?)\s*$")
@@ -80,8 +83,13 @@ class AutoHeightPlainTextEdit(QPlainTextEdit):
 
 
 @dataclass(slots=True)
-class DealScenarioData:
+class DealScenarioImageData:
     image_path: str
+
+
+@dataclass(slots=True)
+class DealScenarioData:
+    images: list[DealScenarioImageData] = field(default_factory=list)
     timeframe: str = ""
     transition_ref: str = ""
     idea: str = ""
@@ -90,32 +98,31 @@ class DealScenarioData:
     tp: str = ""
 
 
-class DealScenarioWidget(QFrame):
+class DealScenarioImageWidget(QFrame):
     changed = Signal()
     remove_requested = Signal(QWidget)
 
-    def __init__(self, data: DealScenarioData, parent: QWidget | None = None) -> None:
+    def __init__(self, data: DealScenarioImageData, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setObjectName("dealScenarioCard")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
         self._base_dir: Path | None = None
         self._source_pixmap = QPixmap()
-        self._transition_ref = data.transition_ref.strip()
+        self.image_path = data.image_path
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(8)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(6)
         root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         header = QHBoxLayout()
-        self.title_label = QLabel("Сделка")
+        self.title_label = QLabel("Картинка")
         header.addWidget(self.title_label)
         header.addStretch(1)
-        remove_button = QPushButton("Удалить")
-        remove_button.clicked.connect(lambda: self.remove_requested.emit(self))
-        header.addWidget(remove_button)
+        self.remove_button = QPushButton("Удалить")
+        self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self))
+        header.addWidget(self.remove_button)
         root.addLayout(header)
 
         self.image_frame = QFrame()
@@ -132,144 +139,25 @@ class DealScenarioWidget(QFrame):
         image_layout.addWidget(self.image_label)
         root.addWidget(self.image_frame)
 
-        tf_row = QHBoxLayout()
-        tf_row.addWidget(QLabel("Таймфрейм *"))
-        self.timeframe_combo = QComboBox()
-        self.timeframe_combo.addItem("Выберите TF", "")
-        for timeframe in TIMEFRAME_OPTIONS:
-            self.timeframe_combo.addItem(timeframe, timeframe)
-        tf_row.addWidget(self.timeframe_combo, 1)
-        root.addLayout(tf_row)
-
-        transition_row = QHBoxLayout()
-        transition_row.addWidget(QLabel("Сценарий перехода *"))
-        self.transition_combo = QComboBox()
-        self.transition_combo.addItem("Выберите сценарий перехода", "")
-        transition_row.addWidget(self.transition_combo, 1)
-        root.addLayout(transition_row)
-
-        helper = QLabel("Мой текст с пояснениями:")
-        helper.setStyleSheet("color: #596579;")
-        root.addWidget(helper)
-
-        self.idea_edit = AutoHeightPlainTextEdit(parent=self)
-        self.entry_edit = AutoHeightPlainTextEdit(parent=self)
-        self.sl_edit = AutoHeightPlainTextEdit(parent=self)
-        self.tp_edit = AutoHeightPlainTextEdit(parent=self)
-
-        self._add_text_field(root, "Идея сделки", self.idea_edit)
-        self._add_text_field(root, "Entry: почему именно так? Можно ли выгоднее? Обосновать", self.entry_edit)
-        self._add_text_field(root, "SL: Почему именно так? Что он отменяет? Обосновать", self.sl_edit)
-        self._add_text_field(root, "TP: Почему именно так? Это оптимальная цель? Обосновать", self.tp_edit)
-
-        self.image_path = data.image_path
-        if data.timeframe:
-            index = self.timeframe_combo.findData(data.timeframe)
-            if index >= 0:
-                self.timeframe_combo.setCurrentIndex(index)
-        self.idea_edit.setPlainText(data.idea)
-        self.entry_edit.setPlainText(data.entry)
-        self.sl_edit.setPlainText(data.sl)
-        self.tp_edit.setPlainText(data.tp)
-        self.set_transition_choices([])
-
         self._update_image_preview()
 
-        self.transition_combo.currentIndexChanged.connect(self._on_transition_changed)
-        self.timeframe_combo.currentIndexChanged.connect(lambda _: self.changed.emit())
-        self.idea_edit.textChanged.connect(self.changed)
-        self.entry_edit.textChanged.connect(self.changed)
-        self.sl_edit.textChanged.connect(self.changed)
-        self.tp_edit.textChanged.connect(self.changed)
-
-    @staticmethod
-    def _add_text_field(layout: QVBoxLayout, label_text: str, editor: QPlainTextEdit) -> None:
-        layout.addWidget(QLabel(label_text))
-        layout.addWidget(editor)
-
     def set_index(self, index: int) -> None:
-        self.title_label.setText(f"Сделка #{index}")
+        self.title_label.setText(f"Картинка #{index}")
 
     def set_base_dir(self, base_dir: Path | None) -> None:
         self._base_dir = base_dir
         self._update_image_preview()
 
-    def set_transition_choices(self, choices: list[tuple[str, str]]) -> None:
-        previous_ref = self._transition_ref or (self.transition_combo.currentData() or "")
-        self.transition_combo.blockSignals(True)
-        self.transition_combo.clear()
-        self.transition_combo.addItem("Выберите сценарий перехода", "")
-        for reference, label in choices:
-            self.transition_combo.addItem(label, reference)
+    def set_read_mode(self, read_mode: bool) -> None:
+        self.remove_button.setVisible(not read_mode)
 
-        if previous_ref:
-            index = self.transition_combo.findData(previous_ref)
-            if index < 0:
-                self.transition_combo.addItem(f"(Не найдено) {previous_ref}", previous_ref)
-                index = self.transition_combo.count() - 1
-            self.transition_combo.setCurrentIndex(index)
-        else:
-            self.transition_combo.setCurrentIndex(0)
-        self.transition_combo.blockSignals(False)
-
-    def to_data(self) -> DealScenarioData:
-        transition_ref = self.transition_combo.currentData() or self._transition_ref
-        return DealScenarioData(
-            image_path=self.image_path,
-            timeframe=self.timeframe_combo.currentData() or "",
-            transition_ref=(transition_ref or "").strip(),
-            idea=self.idea_edit.toPlainText().strip(),
-            entry=self.entry_edit.toPlainText().strip(),
-            sl=self.sl_edit.toPlainText().strip(),
-            tp=self.tp_edit.toPlainText().strip(),
-        )
+    def to_data(self) -> DealScenarioImageData:
+        return DealScenarioImageData(image_path=self.image_path)
 
     def validate(self) -> tuple[bool, str]:
-        data = self.to_data()
-        if not data.image_path.strip():
-            return False, "Не выбрана картинка."
-        if not data.timeframe.strip():
-            return False, "Выберите таймфрейм."
-        if not data.transition_ref.strip():
-            return False, "Выберите сценарий перехода."
-        if not data.idea.strip():
-            return False, "Заполните поле 'Идея сделки'."
-        if not data.entry.strip():
-            return False, "Заполните поле 'Entry'."
-        if not data.sl.strip():
-            return False, "Заполните поле 'SL'."
-        if not data.tp.strip():
-            return False, "Заполните поле 'TP'."
+        if not self.image_path.strip():
+            return False, "Картинка не выбрана."
         return True, ""
-
-    def to_markdown(self, index: int, base_dir: Path | None) -> str:
-        data = self.to_data()
-        image_markdown_path = self._to_markdown_path(Path(data.image_path), base_dir)
-        alt_text = Path(image_markdown_path).stem or f"deal_{index}"
-
-        parts = [
-            f"#### Сделка {index}",
-            f"![{alt_text}]({image_markdown_path})",
-            f"**TF:** {data.timeframe}",
-            f"**Сценарий перехода:** {data.transition_ref}",
-            "",
-            f"**{_FIELD_DEFINITIONS[0][1]}**",
-            data.idea,
-            "",
-            f"**{_FIELD_DEFINITIONS[1][1]}**",
-            data.entry,
-            "",
-            f"**{_FIELD_DEFINITIONS[2][1]}**",
-            data.sl,
-            "",
-            f"**{_FIELD_DEFINITIONS[3][1]}**",
-            data.tp,
-        ]
-        return "\n".join(parts).strip()
-
-    def _on_transition_changed(self, _index: int) -> None:
-        self._transition_ref = (self.transition_combo.currentData() or "").strip()
-        self.changed.emit()
 
     def _resolve_image_path(self) -> Path:
         candidate = Path(self.image_path)
@@ -311,19 +199,281 @@ class DealScenarioWidget(QFrame):
         target_width = max(320, int((frame_width - 2) * 1.24))
         target_width = min(target_width, max(120, frame_width - 2))
         scaled = self._source_pixmap.scaledToWidth(target_width, Qt.TransformationMode.SmoothTransformation)
-        if scaled.height() > 320:
-            scaled = scaled.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
+        if scaled.height() > 544:
+            scaled = scaled.scaledToHeight(544, Qt.TransformationMode.SmoothTransformation)
         self.image_label.setText("")
         self.image_label.setMinimumSize(scaled.size())
         self.image_label.setMaximumSize(scaled.size())
         self.image_label.setPixmap(scaled)
-        target_height = max(224, scaled.height() + 2)
+        target_height = max(381, scaled.height() + 2)
         if self.image_frame.height() != target_height:
             self.image_frame.setFixedHeight(target_height)
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         self._render_image_preview()
+
+
+class DealScenarioWidget(QFrame):
+    changed = Signal()
+    remove_requested = Signal(QWidget)
+
+    def __init__(self, data: DealScenarioData, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setObjectName("dealScenarioCard")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+
+        self._base_dir: Path | None = None
+        self._transition_ref = data.transition_ref.strip()
+        self._read_mode = False
+        self._images: list[DealScenarioImageWidget] = []
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+        root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+
+        header = QHBoxLayout()
+        self.title_label = QLabel("Сделка")
+        header.addWidget(self.title_label)
+        header.addStretch(1)
+        self.add_image_button = QPushButton("Добавить картинку")
+        self.add_image_button.clicked.connect(self._on_add_image_clicked)
+        header.addWidget(self.add_image_button)
+        self.paste_image_button = QPushButton("Вставить из буфера")
+        self.paste_image_button.clicked.connect(self._on_paste_image_clicked)
+        header.addWidget(self.paste_image_button)
+        self.remove_button = QPushButton("Удалить")
+        self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self))
+        header.addWidget(self.remove_button)
+        root.addLayout(header)
+
+        self.images_container = QWidget()
+        self.images_layout = QGridLayout(self.images_container)
+        self.images_layout.setContentsMargins(0, 0, 0, 0)
+        self.images_layout.setSpacing(8)
+        self.images_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.images_layout.setColumnStretch(0, 1)
+        self.images_layout.setColumnStretch(1, 1)
+        root.addWidget(self.images_container)
+
+        tf_row = QHBoxLayout()
+        tf_row.addWidget(QLabel("Таймфрейм *"))
+        self.timeframe_combo = QComboBox()
+        self.timeframe_combo.addItem("Выберите TF", "")
+        for timeframe in TIMEFRAME_OPTIONS:
+            self.timeframe_combo.addItem(timeframe, timeframe)
+        tf_row.addWidget(self.timeframe_combo, 1)
+        root.addLayout(tf_row)
+
+        transition_row = QHBoxLayout()
+        transition_row.addWidget(QLabel("Сценарий перехода *"))
+        self.transition_combo = QComboBox()
+        self.transition_combo.addItem("Выберите сценарий перехода", "")
+        transition_row.addWidget(self.transition_combo, 1)
+        root.addLayout(transition_row)
+
+        self.idea_edit = AutoHeightPlainTextEdit(parent=self)
+        self.entry_edit = AutoHeightPlainTextEdit(parent=self)
+        self.sl_edit = AutoHeightPlainTextEdit(parent=self)
+        self.tp_edit = AutoHeightPlainTextEdit(parent=self)
+
+        self._add_text_field(root, _FIELD_DEFINITIONS[0][1], self.idea_edit)
+        self._add_text_field(root, _FIELD_DEFINITIONS[1][1], self.entry_edit)
+        self._add_text_field(root, _FIELD_DEFINITIONS[2][1], self.sl_edit)
+        self._add_text_field(root, _FIELD_DEFINITIONS[3][1], self.tp_edit)
+
+        if data.timeframe:
+            index = self.timeframe_combo.findData(data.timeframe)
+            if index >= 0:
+                self.timeframe_combo.setCurrentIndex(index)
+        self.idea_edit.setPlainText(data.idea)
+        self.entry_edit.setPlainText(data.entry)
+        self.sl_edit.setPlainText(data.sl)
+        self.tp_edit.setPlainText(data.tp)
+        self.set_transition_choices([])
+
+        for image_data in data.images:
+            if image_data.image_path.strip():
+                self._add_image_widget(image_data)
+        self._update_image_titles()
+
+        self.transition_combo.currentIndexChanged.connect(self._on_transition_changed)
+        self.timeframe_combo.currentIndexChanged.connect(lambda _: self.changed.emit())
+        self.idea_edit.textChanged.connect(self.changed)
+        self.entry_edit.textChanged.connect(self.changed)
+        self.sl_edit.textChanged.connect(self.changed)
+        self.tp_edit.textChanged.connect(self.changed)
+
+    @staticmethod
+    def _add_text_field(layout: QVBoxLayout, label_text: str, editor: QPlainTextEdit) -> None:
+        layout.addWidget(QLabel(label_text))
+        layout.addWidget(editor)
+
+    def set_index(self, index: int) -> None:
+        self.title_label.setText(f"Сделка #{index}")
+
+    def set_base_dir(self, base_dir: Path | None) -> None:
+        self._base_dir = base_dir
+        for image in self._images:
+            image.set_base_dir(base_dir)
+
+    def set_read_mode(self, read_mode: bool) -> None:
+        self._read_mode = read_mode
+        self.remove_button.setVisible(not read_mode)
+        self.add_image_button.setVisible(not read_mode)
+        self.paste_image_button.setVisible(not read_mode)
+        self.timeframe_combo.setEnabled(not read_mode)
+        self.transition_combo.setEnabled(not read_mode)
+        self.idea_edit.setReadOnly(read_mode)
+        self.entry_edit.setReadOnly(read_mode)
+        self.sl_edit.setReadOnly(read_mode)
+        self.tp_edit.setReadOnly(read_mode)
+        for image in self._images:
+            image.set_read_mode(read_mode)
+
+    def set_transition_choices(self, choices: list[tuple[str, str]]) -> None:
+        previous_ref = self._transition_ref or (self.transition_combo.currentData() or "")
+        self.transition_combo.blockSignals(True)
+        self.transition_combo.clear()
+        self.transition_combo.addItem("Выберите сценарий перехода", "")
+        for reference, label in choices:
+            self.transition_combo.addItem(label, reference)
+
+        if previous_ref:
+            index = self.transition_combo.findData(previous_ref)
+            if index < 0:
+                self.transition_combo.addItem(f"(Не найдено) {previous_ref}", previous_ref)
+                index = self.transition_combo.count() - 1
+            self.transition_combo.setCurrentIndex(index)
+        else:
+            self.transition_combo.setCurrentIndex(0)
+        self.transition_combo.blockSignals(False)
+
+    def image_widgets(self) -> list[DealScenarioImageWidget]:
+        return list(self._images)
+
+    def to_data(self) -> DealScenarioData:
+        transition_ref = self.transition_combo.currentData() or self._transition_ref
+        return DealScenarioData(
+            images=[entry.to_data() for entry in self._images],
+            timeframe=self.timeframe_combo.currentData() or "",
+            transition_ref=(transition_ref or "").strip(),
+            idea=self.idea_edit.toPlainText().strip(),
+            entry=self.entry_edit.toPlainText().strip(),
+            sl=self.sl_edit.toPlainText().strip(),
+            tp=self.tp_edit.toPlainText().strip(),
+        )
+
+    def validate(self) -> tuple[bool, str]:
+        data = self.to_data()
+        if not data.images:
+            return False, "Добавьте минимум одну картинку."
+        for index, image in enumerate(self._images, start=1):
+            ok, error = image.validate()
+            if not ok:
+                return False, f"Картинка #{index}: {error}"
+        if not data.timeframe.strip():
+            return False, "Выберите таймфрейм."
+        if not data.transition_ref.strip():
+            return False, "Выберите сценарий перехода."
+        if not data.idea.strip():
+            return False, "Заполните поле 'Идея сделки'."
+        if not data.entry.strip():
+            return False, "Заполните поле 'Entry'."
+        if not data.sl.strip():
+            return False, "Заполните поле 'SL'."
+        if not data.tp.strip():
+            return False, "Заполните поле 'TP'."
+        return True, ""
+
+    def to_markdown(self, index: int, base_dir: Path | None) -> str:
+        data = self.to_data()
+        parts = [f"#### Сделка {index}"]
+        for image_index, image in enumerate(data.images, start=1):
+            image_markdown_path = self._to_markdown_path(Path(image.image_path), base_dir)
+            alt_text = Path(image_markdown_path).stem or f"deal_{index}_{image_index}"
+            parts.append(f"![{alt_text}]({image_markdown_path})")
+        parts.extend(
+            [
+                f"**TF:** {data.timeframe}",
+                f"**Сценарий перехода:** {data.transition_ref}",
+                "",
+                f"**{_FIELD_DEFINITIONS[0][1]}**",
+                data.idea,
+                "",
+                f"**{_FIELD_DEFINITIONS[1][1]}**",
+                data.entry,
+                "",
+                f"**{_FIELD_DEFINITIONS[2][1]}**",
+                data.sl,
+                "",
+                f"**{_FIELD_DEFINITIONS[3][1]}**",
+                data.tp,
+            ]
+        )
+        return "\n".join(parts).strip()
+
+    def _on_transition_changed(self, _index: int) -> None:
+        self._transition_ref = (self.transition_combo.currentData() or "").strip()
+        self.changed.emit()
+
+    def _on_add_image_clicked(self) -> None:
+        start_dir = str(self._base_dir) if self._base_dir else str(Path.home())
+        image_file, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите картинку",
+            start_dir,
+            "Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.svg)",
+        )
+        if not image_file:
+            return
+
+        self._add_image_widget(DealScenarioImageData(image_path=image_file))
+        self._update_image_titles()
+        self.changed.emit()
+
+    def _on_paste_image_clicked(self) -> None:
+        image_path = image_path_from_clipboard()
+        if image_path is None:
+            QMessageBox.warning(self, "Буфер обмена", "В буфере обмена нет изображения.")
+            return
+
+        self._add_image_widget(DealScenarioImageData(image_path=str(image_path)))
+        self._update_image_titles()
+        self.changed.emit()
+
+    def _add_image_widget(self, data: DealScenarioImageData) -> None:
+        widget = DealScenarioImageWidget(data, self)
+        widget.set_base_dir(self._base_dir)
+        widget.set_read_mode(self._read_mode)
+        widget.changed.connect(self.changed)
+        widget.remove_requested.connect(self._remove_image_widget)
+        self._images.append(widget)
+        self._refresh_images_layout()
+
+    def _remove_image_widget(self, widget: QWidget) -> None:
+        if widget in self._images:
+            self._images.remove(widget)
+        widget.setParent(None)
+        widget.deleteLater()
+        self._refresh_images_layout()
+        self._update_image_titles()
+        self.changed.emit()
+
+    def _update_image_titles(self) -> None:
+        for index, image in enumerate(self._images, start=1):
+            image.set_index(index)
+
+    def _refresh_images_layout(self) -> None:
+        while self.images_layout.count():
+            self.images_layout.takeAt(0)
+
+        for index, image in enumerate(self._images):
+            row = index // 2
+            col = index % 2
+            self.images_layout.addWidget(image, row, col)
 
     @staticmethod
     def _to_markdown_path(path: Path, base_dir: Path | None) -> str:
@@ -342,6 +492,7 @@ class DealScenariosEditor(QWidget):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self._base_dir: Path | None = None
+        self._read_mode = False
         self._transition_choices: list[tuple[str, str]] = []
         self._entries: list[DealScenarioWidget] = []
 
@@ -354,6 +505,9 @@ class DealScenariosEditor(QWidget):
         self.add_image_button = QPushButton("Добавить сделку")
         self.add_image_button.clicked.connect(self._on_add_image_clicked)
         top_row.addWidget(self.add_image_button)
+        self.paste_image_button = QPushButton("Вставить из буфера")
+        self.paste_image_button.clicked.connect(self._on_paste_image_clicked)
+        top_row.addWidget(self.paste_image_button)
         top_row.addStretch(1)
         root.addLayout(top_row)
 
@@ -376,6 +530,13 @@ class DealScenariosEditor(QWidget):
         self._base_dir = base_dir
         for entry in self._entries:
             entry.set_base_dir(base_dir)
+
+    def set_read_mode(self, read_mode: bool) -> None:
+        self._read_mode = read_mode
+        self.add_image_button.setVisible(not read_mode)
+        self.paste_image_button.setVisible(not read_mode)
+        for entry in self._entries:
+            entry.set_read_mode(read_mode)
 
     def set_transition_choices(self, choices: list[tuple[str, str]]) -> None:
         self._transition_choices = choices
@@ -408,8 +569,11 @@ class DealScenariosEditor(QWidget):
     def has_content(self) -> bool:
         return bool(self._entries)
 
-    def image_widgets(self) -> list[DealScenarioWidget]:
-        return list(self._entries)
+    def image_widgets(self) -> list[DealScenarioImageWidget]:
+        widgets: list[DealScenarioImageWidget] = []
+        for entry in self._entries:
+            widgets.extend(entry.image_widgets())
+        return widgets
 
     def _on_add_image_clicked(self) -> None:
         start_dir = str(self._base_dir) if self._base_dir else str(Path.home())
@@ -422,7 +586,18 @@ class DealScenariosEditor(QWidget):
         if not image_file:
             return
 
-        self._add_entry_widget(DealScenarioData(image_path=image_file))
+        self._add_entry_widget(DealScenarioData(images=[DealScenarioImageData(image_path=image_file)]))
+        self._update_entry_titles()
+        self._update_empty_state()
+        self.content_changed.emit()
+
+    def _on_paste_image_clicked(self) -> None:
+        image_path = image_path_from_clipboard()
+        if image_path is None:
+            QMessageBox.warning(self, "Буфер обмена", "В буфере обмена нет изображения.")
+            return
+
+        self._add_entry_widget(DealScenarioData(images=[DealScenarioImageData(image_path=str(image_path))]))
         self._update_entry_titles()
         self._update_empty_state()
         self.content_changed.emit()
@@ -430,6 +605,7 @@ class DealScenariosEditor(QWidget):
     def _add_entry_widget(self, data: DealScenarioData) -> None:
         entry = DealScenarioWidget(data, self)
         entry.set_base_dir(self._base_dir)
+        entry.set_read_mode(self._read_mode)
         entry.set_transition_choices(self._transition_choices)
         entry.changed.connect(self.content_changed)
         entry.remove_requested.connect(self._remove_entry_widget)
@@ -467,54 +643,60 @@ class DealScenariosEditor(QWidget):
         if not text:
             return []
 
-        image_matches = list(_IMAGE_RE.finditer(text))
-        if not image_matches:
-            return [
-                DealScenarioData(
-                    image_path="",
-                    transition_ref="",
-                    idea=text,
-                    entry="",
-                    sl="",
-                    tp="",
-                )
-            ]
-
+        chunks = DealScenariosEditor._split_deal_chunks(text)
         entries: list[DealScenarioData] = []
-        for index, match in enumerate(image_matches):
-            start = match.start()
-            end = image_matches[index + 1].start() if index + 1 < len(image_matches) else len(text)
-            chunk = text[start:end].strip()
-
-            image_path = match.group(1).strip()
-            timeframe_match = re.search(r"(?mi)^\*\*TF:\*\*\s*(.+?)\s*$", chunk)
-            if not timeframe_match:
-                timeframe_match = re.search(r"(?mi)^TF:\s*(.+?)\s*$", chunk)
-            timeframe = timeframe_match.group(1).strip() if timeframe_match else ""
-            transition_match = _TRANSITION_REF_RE.search(chunk)
-            transition_ref = transition_match.group(1).strip() if transition_match else ""
-            fields = _extract_fields_by_headers(chunk)
-            if all(not value for value in fields.values()):
-                body_after_image = chunk[match.end() - start :].strip()
-                body_after_image = re.sub(r"(?mi)^\*\*TF:\*\*.*$", "", body_after_image).strip()
-                body_after_image = re.sub(r"(?mi)^TF:\s*.*$", "", body_after_image).strip()
-                body_after_image = re.sub(
-                    r"(?mi)^\*\*Сценарий перехода:\*\*.*$",
-                    "",
-                    body_after_image,
-                ).strip()
-                fields["idea"] = body_after_image
-
-            entries.append(
-                DealScenarioData(
-                    image_path=image_path,
-                    timeframe=timeframe,
-                    transition_ref=transition_ref,
-                    idea=fields["idea"],
-                    entry=fields["entry"],
-                    sl=fields["sl"],
-                    tp=fields["tp"],
-                )
-            )
+        for chunk in chunks:
+            parsed = DealScenariosEditor._parse_chunk(chunk)
+            if parsed is not None:
+                entries.append(parsed)
 
         return entries
+
+    @staticmethod
+    def _split_deal_chunks(text: str) -> list[str]:
+        heading_matches = list(re.finditer(r"(?mi)^####\s+.+$", text))
+        if heading_matches:
+            chunks: list[str] = []
+            for index, match in enumerate(heading_matches):
+                start = match.start()
+                end = heading_matches[index + 1].start() if index + 1 < len(heading_matches) else len(text)
+                chunk = text[start:end].strip()
+                if chunk:
+                    chunks.append(chunk)
+            return chunks
+
+        split_chunks = [chunk.strip() for chunk in re.split(r"(?mi)^\s*---+\s*$", text) if chunk.strip()]
+        return split_chunks if split_chunks else [text]
+
+    @staticmethod
+    def _parse_chunk(chunk: str) -> DealScenarioData | None:
+        text = chunk.strip()
+        if not text:
+            return None
+
+        images = [DealScenarioImageData(image_path=match.group(1).strip()) for match in _IMAGE_RE.finditer(text)]
+
+        timeframe_match = re.search(r"(?mi)^\s*(?:\*\*TF:\*\*|TF:)\s*(.+?)\s*$", text)
+        timeframe = timeframe_match.group(1).strip() if timeframe_match else ""
+
+        transition_match = _TRANSITION_REF_RE.search(text)
+        transition_ref = transition_match.group(1).strip() if transition_match else ""
+
+        fields = _extract_fields_by_headers(text)
+        if all(not value for value in fields.values()):
+            body = re.sub(r"(?mi)^####\s+.+$", "", text)
+            body = _IMAGE_RE.sub("", body)
+            body = re.sub(r"(?mi)^\s*(?:\*\*TF:\*\*|TF:)\s*.+$", "", body)
+            body = re.sub(r"(?mi)^\*\*Сценарий перехода:\*\*.*$", "", body)
+            body = re.sub(r"(?mi)^---+\s*$", "", body)
+            fields["idea"] = body.strip()
+
+        return DealScenarioData(
+            images=images,
+            timeframe=timeframe,
+            transition_ref=transition_ref,
+            idea=fields["idea"],
+            entry=fields["entry"],
+            sl=fields["sl"],
+            tp=fields["tp"],
+        )

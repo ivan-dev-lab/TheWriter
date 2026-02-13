@@ -4,6 +4,7 @@ from app.ui.deal_scenarios import DealScenariosEditor
 def test_parse_deal_scenarios_markdown() -> None:
     markdown = """#### Сделка 1
 ![deal_1](img1.png)
+![deal_2](img2.png)
 **TF:** M15
 **Сценарий перехода:** GET + H1 OB ACTUAL - H4 DR Premium
 
@@ -23,7 +24,9 @@ TP rationale
     entries = DealScenariosEditor._parse_entries(markdown)
     assert len(entries) == 1
     entry = entries[0]
-    assert entry.image_path == "img1.png"
+    assert len(entry.images) == 2
+    assert entry.images[0].image_path == "img1.png"
+    assert entry.images[1].image_path == "img2.png"
     assert entry.timeframe == "M15"
     assert entry.transition_ref == "GET + H1 OB ACTUAL - H4 DR Premium"
     assert entry.idea == "Идея"
@@ -37,7 +40,8 @@ def test_parse_deal_scenarios_without_sections() -> None:
     entries = DealScenariosEditor._parse_entries(markdown)
     assert len(entries) == 1
     entry = entries[0]
-    assert entry.image_path == "img.png"
+    assert len(entry.images) == 1
+    assert entry.images[0].image_path == "img.png"
     assert entry.timeframe == "H1"
     assert entry.transition_ref == ""
     assert entry.idea == "Текст без заголовков"
@@ -51,5 +55,31 @@ def test_parse_deal_scenarios_without_image_keeps_text() -> None:
     entries = DealScenariosEditor._parse_entries(markdown)
     assert len(entries) == 1
     entry = entries[0]
-    assert entry.image_path == ""
+    assert entry.images == []
     assert entry.idea == "Старый формат блока 3 без картинки"
+
+
+def test_parse_deal_scenarios_multiple_headings() -> None:
+    markdown = """#### Сделка 1
+![a](a.png)
+**TF:** H1
+**Сценарий перехода:** CREATE + M5 FVG
+
+**Идея сделки**
+A
+
+---
+
+#### Сделка 2
+![b](b.png)
+**TF:** M15
+**Сценарий перехода:** GET + H1 OB ACTUAL - H4 DR Premium
+
+**Идея сделки**
+B
+"""
+
+    entries = DealScenariosEditor._parse_entries(markdown)
+    assert len(entries) == 2
+    assert entries[0].images[0].image_path == "a.png"
+    assert entries[1].images[0].image_path == "b.png"

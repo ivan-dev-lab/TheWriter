@@ -16,11 +16,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QMessageBox,
     QSizePolicy,
     QLayout,
     QVBoxLayout,
     QWidget,
 )
+
+from .image_clipboard import image_path_from_clipboard
 
 TIMEFRAME_OPTIONS = ["m1", "m5", "m15", "h1", "h4", "D1", "W1", "M1"]
 ELEMENT_OPTIONS = [
@@ -461,9 +464,9 @@ class SituationEntryWidget(QFrame):
         self.title_label = QLabel("Картинка")
         header.addWidget(self.title_label)
         header.addStretch(1)
-        remove_button = QPushButton("Удалить")
-        remove_button.clicked.connect(lambda: self.remove_requested.emit(self))
-        header.addWidget(remove_button)
+        self.remove_button = QPushButton("Удалить")
+        self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self))
+        header.addWidget(self.remove_button)
         root.addLayout(header)
 
         self.image_frame = QFrame()
@@ -481,7 +484,8 @@ class SituationEntryWidget(QFrame):
         root.addWidget(self.image_frame)
 
         tf_row = QHBoxLayout()
-        tf_row.addWidget(QLabel("TF *"))
+        self.tf_label = QLabel("TF *")
+        tf_row.addWidget(self.tf_label)
         self.timeframe_combo = QComboBox()
         self.timeframe_combo.addItem("Выберите TF", "")
         for timeframe in TIMEFRAME_OPTIONS:
@@ -504,6 +508,10 @@ class SituationEntryWidget(QFrame):
     def set_base_dir(self, base_dir: Path | None) -> None:
         self._base_dir = base_dir
         self._update_image_preview()
+
+    def set_read_mode(self, read_mode: bool) -> None:
+        self.remove_button.setVisible(not read_mode)
+        self.timeframe_combo.setEnabled(not read_mode)
 
     def to_data(self) -> SituationEntryData:
         return SituationEntryData(
@@ -571,13 +579,13 @@ class SituationEntryWidget(QFrame):
         target_width = max(320, int((frame_width - 2) * 1.24))
         target_width = min(target_width, max(120, frame_width - 2))
         scaled = self._source_pixmap.scaledToWidth(target_width, Qt.TransformationMode.SmoothTransformation)
-        if scaled.height() > 320:
-            scaled = scaled.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
+        if scaled.height() > 544:
+            scaled = scaled.scaledToHeight(544, Qt.TransformationMode.SmoothTransformation)
         self.image_label.setText("")
         self.image_label.setMinimumSize(scaled.size())
         self.image_label.setMaximumSize(scaled.size())
         self.image_label.setPixmap(scaled)
-        target_height = max(224, scaled.height() + 2)
+        target_height = max(381, scaled.height() + 2)
         if self.image_frame.height() != target_height:
             self.image_frame.setFixedHeight(target_height)
 
@@ -601,6 +609,8 @@ class CurrentSituationEditor(QWidget):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self._base_dir: Path | None = None
+        self._read_mode = False
+        self._auto_generated_text = ""
         self._entries: list[SituationEntryWidget] = []
 
         root = QVBoxLayout(self)
@@ -612,6 +622,9 @@ class CurrentSituationEditor(QWidget):
         self.add_image_button = QPushButton("Добавить картинку")
         self.add_image_button.clicked.connect(self._on_add_image_clicked)
         top_row.addWidget(self.add_image_button)
+        self.paste_image_button = QPushButton("Вставить из буфера")
+        self.paste_image_button.clicked.connect(self._on_paste_image_clicked)
+        top_row.addWidget(self.paste_image_button)
         top_row.addStretch(1)
         root.addLayout(top_row)
 
@@ -634,7 +647,8 @@ class CurrentSituationEditor(QWidget):
         notation_layout.setContentsMargins(0, 0, 0, 0)
         notation_layout.setSpacing(6)
 
-        notation_layout.addWidget(QLabel("Нотация *"))
+        self.notation_label = QLabel("Нотация *")
+        notation_layout.addWidget(self.notation_label)
         self.notation_edit = NotationTextEdit(self)
         notation_layout.addWidget(self.notation_edit)
 
@@ -645,7 +659,8 @@ class CurrentSituationEditor(QWidget):
         self.notation_status.setStyleSheet("color: #95a1b5;")
         notation_layout.addWidget(self.notation_status)
 
-        notation_layout.addWidget(QLabel("Текст под картинками"))
+        self.manual_label = QLabel("Текст под картинками")
+        notation_layout.addWidget(self.manual_label)
         self.manual_edit = QPlainTextEdit(self)
         self.manual_edit.setPlaceholderText("Введите дополнительный текст для блока текущей ситуации.")
         self.manual_edit.setMinimumHeight(120)
@@ -659,6 +674,20 @@ class CurrentSituationEditor(QWidget):
         self._update_empty_state()
         self._update_notation_feedback()
 
+    def set_read_mode(self, read_mode: bool) -> None:
+        self._read_mode = read_mode
+        self.add_image_button.setVisible(not read_mode)
+        self.paste_image_button.setVisible(not read_mode)
+        self.notation_label.setVisible(not read_mode)
+        self.notation_edit.setVisible(not read_mode)
+        self.notation_status.setVisible(not read_mode)
+        self.manual_label.setVisible(not read_mode)
+        self.manual_label.setText("Текст под картинками")
+        self.manual_edit.setReadOnly(read_mode)
+        for entry in self._entries:
+            entry.set_read_mode(read_mode)
+        self._update_empty_state()
+
     def set_base_directory(self, base_dir: Path | None) -> None:
         self._base_dir = base_dir
         for entry in self._entries:
@@ -666,6 +695,10 @@ class CurrentSituationEditor(QWidget):
 
     def load_from_markdown(self, markdown: str) -> None:
         parsed_entries, notation_text, manual_text = self._parse_block(markdown)
+        generated_from_notation = self._generated_text_from_notation(notation_text)
+        manual_suffix = self._extract_manual_suffix(manual_text, generated_from_notation)
+        composed_manual_text = self._compose_manual_text(generated_from_notation, manual_suffix)
+
         self._clear_entries()
         for data in parsed_entries:
             self._add_entry_widget(data)
@@ -673,8 +706,9 @@ class CurrentSituationEditor(QWidget):
         self.notation_edit.setPlainText(notation_text)
         self.notation_edit.blockSignals(False)
         self.manual_edit.blockSignals(True)
-        self.manual_edit.setPlainText(manual_text)
+        self.manual_edit.setPlainText(composed_manual_text)
         self.manual_edit.blockSignals(False)
+        self._auto_generated_text = generated_from_notation
         self._update_entry_titles()
         self._update_empty_state()
         self._update_notation_feedback()
@@ -684,6 +718,9 @@ class CurrentSituationEditor(QWidget):
         chunks = [entry.to_markdown(index + 1, self._base_dir) for index, entry in enumerate(self._entries)]
         notation = self.notation_edit.toPlainText().strip()
         manual_text = self.manual_edit.toPlainText().strip()
+        generated_from_notation = self._generated_text_from_notation(notation)
+        manual_suffix = self._extract_manual_suffix(manual_text, generated_from_notation)
+        manual_text = self._compose_manual_text(generated_from_notation, manual_suffix)
 
         parts: list[str] = []
         if chunks:
@@ -721,6 +758,7 @@ class CurrentSituationEditor(QWidget):
         return list(self._entries)
 
     def _on_notation_changed(self) -> None:
+        self._sync_manual_text_with_notation()
         self._update_notation_feedback()
         self.content_changed.emit()
 
@@ -756,9 +794,21 @@ class CurrentSituationEditor(QWidget):
         self._update_empty_state()
         self.content_changed.emit()
 
+    def _on_paste_image_clicked(self) -> None:
+        image_path = image_path_from_clipboard()
+        if image_path is None:
+            QMessageBox.warning(self, "Буфер обмена", "В буфере обмена нет изображения.")
+            return
+
+        self._add_entry_widget(SituationEntryData(image_path=str(image_path)))
+        self._update_entry_titles()
+        self._update_empty_state()
+        self.content_changed.emit()
+
     def _add_entry_widget(self, data: SituationEntryData) -> None:
         entry = SituationEntryWidget(data, self)
         entry.set_base_dir(self._base_dir)
+        entry.set_read_mode(self._read_mode)
         entry.changed.connect(self.content_changed)
         entry.remove_requested.connect(self._remove_entry_widget)
         self._entries.append(entry)
@@ -799,6 +849,62 @@ class CurrentSituationEditor(QWidget):
         self.empty_label.setVisible(is_empty)
         self.entries_container.setVisible(not is_empty)
         self.notation_container.setVisible(not is_empty)
+        self.notation_label.setVisible((not is_empty) and (not self._read_mode))
+        self.notation_edit.setVisible((not is_empty) and (not self._read_mode))
+        self.notation_status.setVisible((not is_empty) and (not self._read_mode))
+
+    @staticmethod
+    def _extract_manual_suffix(manual_text: str, generated_text: str) -> str:
+        text = manual_text.strip()
+        generated = generated_text.strip()
+        if not generated:
+            return text
+        if text.casefold().startswith(generated.casefold()):
+            return text[len(generated) :].lstrip(" \t\r\n-:;,.")
+        return text
+
+    @staticmethod
+    def _compose_manual_text(generated_text: str, manual_suffix: str) -> str:
+        generated = generated_text.strip()
+        suffix = manual_suffix.strip()
+        if generated and suffix:
+            return f"{generated}\n{suffix}"
+        if generated:
+            return generated
+        return suffix
+
+    @staticmethod
+    def _generated_text_from_notation(notation: str) -> str:
+        cleaned = notation.strip()
+        if not cleaned:
+            return ""
+        generated, error = notation_to_text(cleaned)
+        if error or not generated:
+            return ""
+        return generated.strip()
+
+    def _sync_manual_text_with_notation(self) -> None:
+        current_manual = self.manual_edit.toPlainText().strip()
+        notation_text = self.notation_edit.toPlainText().strip()
+        generated = self._generated_text_from_notation(notation_text)
+        if notation_text and not generated:
+            return
+
+        suffix = self._extract_manual_suffix(current_manual, self._auto_generated_text)
+        if not suffix:
+            suffix = self._extract_manual_suffix(current_manual, generated)
+        composed = self._compose_manual_text(generated, suffix)
+        self._auto_generated_text = generated
+
+        if composed == current_manual:
+            return
+
+        self.manual_edit.blockSignals(True)
+        self.manual_edit.setPlainText(composed)
+        cursor = self.manual_edit.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.manual_edit.setTextCursor(cursor)
+        self.manual_edit.blockSignals(False)
 
     @staticmethod
     def _parse_entries(markdown: str) -> list[SituationEntryData]:
@@ -851,4 +957,5 @@ class CurrentSituationEditor(QWidget):
         manual_text = manual_text.strip()
 
         return entries, notation, manual_text
+
 

@@ -18,12 +18,14 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QMessageBox,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from .current_situation import ELEMENT_OPTIONS, TIMEFRAME_OPTIONS
+from .image_clipboard import image_path_from_clipboard
 
 _IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
 _MEANING_RE = re.compile(
@@ -782,9 +784,9 @@ class TransitionScenarioImageWidget(QFrame):
         self.title_label = QLabel("Картинка")
         header.addWidget(self.title_label)
         header.addStretch(1)
-        remove_button = QPushButton("Удалить")
-        remove_button.clicked.connect(lambda: self.remove_requested.emit(self))
-        header.addWidget(remove_button)
+        self.remove_button = QPushButton("Удалить")
+        self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self))
+        header.addWidget(self.remove_button)
         root.addLayout(header)
 
         self.image_frame = QFrame()
@@ -802,7 +804,8 @@ class TransitionScenarioImageWidget(QFrame):
         root.addWidget(self.image_frame)
 
         tf_row = QHBoxLayout()
-        tf_row.addWidget(QLabel("Таймфрейм *"))
+        self.tf_label = QLabel("Таймфрейм *")
+        tf_row.addWidget(self.tf_label)
         self.timeframe_combo = QComboBox()
         self.timeframe_combo.addItem("Выберите TF", "")
         for timeframe in TIMEFRAME_OPTIONS:
@@ -823,6 +826,10 @@ class TransitionScenarioImageWidget(QFrame):
     def set_base_dir(self, base_dir: Path | None) -> None:
         self._base_dir = base_dir
         self._update_image_preview()
+
+    def set_read_mode(self, read_mode: bool) -> None:
+        self.remove_button.setVisible(not read_mode)
+        self.timeframe_combo.setEnabled(not read_mode)
 
     def to_data(self) -> TransitionScenarioImageData:
         return TransitionScenarioImageData(
@@ -877,13 +884,13 @@ class TransitionScenarioImageWidget(QFrame):
         target_width = max(320, int((frame_width - 2) * 1.24))
         target_width = min(target_width, max(120, frame_width - 2))
         scaled = self._source_pixmap.scaledToWidth(target_width, Qt.TransformationMode.SmoothTransformation)
-        if scaled.height() > 320:
-            scaled = scaled.scaledToHeight(320, Qt.TransformationMode.SmoothTransformation)
+        if scaled.height() > 544:
+            scaled = scaled.scaledToHeight(544, Qt.TransformationMode.SmoothTransformation)
         self.image_label.setText("")
-        self.image_label.setMinimumSize(scaled.size())
-        self.image_label.setMaximumSize(scaled.size())
+        self.image_label.setMinimumSize(0, 0)
+        self.image_label.setMaximumSize(16777215, 16777215)
         self.image_label.setPixmap(scaled)
-        target_height = max(224, scaled.height() + 2)
+        target_height = max(381, scaled.height() + 2)
         if self.image_frame.height() != target_height:
             self.image_frame.setFixedHeight(target_height)
 
@@ -904,6 +911,7 @@ class TransitionScenarioWidget(QFrame):
 
         self._base_dir: Path | None = None
         self._follow_up_visible = False
+        self._read_mode = False
         self._images: list[TransitionScenarioImageWidget] = []
 
         root = QVBoxLayout(self)
@@ -918,9 +926,12 @@ class TransitionScenarioWidget(QFrame):
         self.add_image_button = QPushButton("Добавить картинку")
         self.add_image_button.clicked.connect(self._on_add_image_clicked)
         header.addWidget(self.add_image_button)
-        remove_button = QPushButton("Удалить")
-        remove_button.clicked.connect(lambda: self.remove_requested.emit(self))
-        header.addWidget(remove_button)
+        self.paste_image_button = QPushButton("Вставить из буфера")
+        self.paste_image_button.clicked.connect(self._on_paste_image_clicked)
+        header.addWidget(self.paste_image_button)
+        self.remove_button = QPushButton("Удалить")
+        self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self))
+        header.addWidget(self.remove_button)
         root.addLayout(header)
 
         self.images_container = QWidget()
@@ -932,7 +943,8 @@ class TransitionScenarioWidget(QFrame):
         self.images_layout.setColumnStretch(1, 1)
         root.addWidget(self.images_container)
 
-        root.addWidget(QLabel("Нотация *"))
+        self.notation_label = QLabel("Нотация *")
+        root.addWidget(self.notation_label)
         self.notation_edit = TransitionNotationEdit()
         root.addWidget(self.notation_edit)
 
@@ -984,6 +996,18 @@ class TransitionScenarioWidget(QFrame):
         self._base_dir = base_dir
         for image in self._images:
             image.set_base_dir(base_dir)
+
+    def set_read_mode(self, read_mode: bool) -> None:
+        self._read_mode = read_mode
+        self.add_image_button.setVisible(not read_mode)
+        self.paste_image_button.setVisible(not read_mode)
+        self.remove_button.setVisible(not read_mode)
+        self.notation_label.setVisible(not read_mode)
+        self.notation_edit.setVisible(not read_mode)
+        self.manual_edit.setReadOnly(read_mode)
+        for image in self._images:
+            image.set_read_mode(read_mode)
+        self._set_follow_up_visible(self._follow_up_visible)
 
     def to_data(self) -> TransitionScenarioData:
         return TransitionScenarioData(
@@ -1115,9 +1139,20 @@ class TransitionScenarioWidget(QFrame):
         self._update_image_titles()
         self.changed.emit()
 
+    def _on_paste_image_clicked(self) -> None:
+        image_path = image_path_from_clipboard()
+        if image_path is None:
+            QMessageBox.warning(self, "Буфер обмена", "В буфере обмена нет изображения.")
+            return
+
+        self._add_image_widget(TransitionScenarioImageData(image_path=str(image_path)))
+        self._update_image_titles()
+        self.changed.emit()
+
     def _add_image_widget(self, data: TransitionScenarioImageData) -> None:
         widget = TransitionScenarioImageWidget(data, self)
         widget.set_base_dir(self._base_dir)
+        widget.set_read_mode(self._read_mode)
         widget.changed.connect(self.changed)
         widget.remove_requested.connect(self._remove_image_widget)
         self._images.append(widget)
@@ -1140,10 +1175,12 @@ class TransitionScenarioWidget(QFrame):
         while self.images_layout.count():
             self.images_layout.takeAt(0)
 
+        columns = 2
         for index, image in enumerate(self._images):
-            row = index // 2
-            col = index % 2
+            row = index // columns
+            col = index % columns
             self.images_layout.addWidget(image, row, col)
+            QTimer.singleShot(0, image._render_image_preview)
 
     def _on_notation_changed(self) -> None:
         notation_text = self.notation_edit.text().strip()
@@ -1157,7 +1194,7 @@ class TransitionScenarioWidget(QFrame):
             self.changed.emit()
             return
 
-        self.notation_status.setText(f"Результат: {generated}")
+        self.notation_status.setText(generated or "")
         self.notation_status.setStyleSheet("color: #24d061;")
         self.changed.emit()
 
@@ -1184,7 +1221,7 @@ class TransitionScenarioWidget(QFrame):
                 self.changed.emit()
             return
 
-        self.meaning_status.setText(f"Результат: {generated}")
+        self.meaning_status.setText(generated or "")
         self.meaning_status.setStyleSheet("color: #24d061;")
         if emit_change:
             self.changed.emit()
@@ -1192,7 +1229,7 @@ class TransitionScenarioWidget(QFrame):
     def _set_follow_up_visible(self, visible: bool) -> None:
         self._follow_up_visible = visible
         self.meaning_label.setVisible(visible)
-        self.meaning_notation_edit.setVisible(visible)
+        self.meaning_notation_edit.setVisible(visible and (not self._read_mode))
         self.meaning_status.setVisible(visible)
         self.why_label.setVisible(visible)
         self.manual_edit.setVisible(visible)
@@ -1214,6 +1251,7 @@ class TransitionScenariosEditor(QWidget):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self._base_dir: Path | None = None
+        self._read_mode = False
         self._entries: list[TransitionScenarioWidget] = []
 
         root = QVBoxLayout(self)
@@ -1225,6 +1263,9 @@ class TransitionScenariosEditor(QWidget):
         self.add_image_button = QPushButton("Добавить сценарий")
         self.add_image_button.clicked.connect(self._on_add_image_clicked)
         top_row.addWidget(self.add_image_button)
+        self.paste_image_button = QPushButton("Вставить из буфера")
+        self.paste_image_button.clicked.connect(self._on_paste_image_clicked)
+        top_row.addWidget(self.paste_image_button)
         top_row.addStretch(1)
         root.addLayout(top_row)
 
@@ -1248,6 +1289,13 @@ class TransitionScenariosEditor(QWidget):
         for entry in self._entries:
             entry.set_base_dir(base_dir)
 
+    def set_read_mode(self, read_mode: bool) -> None:
+        self._read_mode = read_mode
+        self.add_image_button.setVisible(not read_mode)
+        self.paste_image_button.setVisible(not read_mode)
+        for entry in self._entries:
+            entry.set_read_mode(read_mode)
+
     def load_from_markdown(self, markdown: str) -> None:
         self._clear_entries()
         for data in self._parse_entries(markdown):
@@ -1256,9 +1304,25 @@ class TransitionScenariosEditor(QWidget):
         self._update_empty_state()
         self.content_changed.emit()
 
+    def _on_paste_image_clicked(self) -> None:
+        image_path = image_path_from_clipboard()
+        if image_path is None:
+            QMessageBox.warning(self, "Буфер обмена", "В буфере обмена нет изображения.")
+            return
+
+        self._add_entry_widget(
+            TransitionScenarioData(
+                images=[TransitionScenarioImageData(image_path=str(image_path))],
+            )
+        )
+        self._update_entry_titles()
+        self._update_empty_state()
+        self.content_changed.emit()
+
     def _add_entry_widget(self, data: TransitionScenarioData) -> None:
         entry = TransitionScenarioWidget(data, self)
         entry.set_base_dir(self._base_dir)
+        entry.set_read_mode(self._read_mode)
         entry.changed.connect(self.content_changed)
         entry.remove_requested.connect(self._remove_entry_widget)
 
@@ -1415,3 +1479,4 @@ class TransitionScenariosEditor(QWidget):
         self._update_entry_titles()
         self._update_empty_state()
         self.content_changed.emit()
+
