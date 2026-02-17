@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QToolButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -228,6 +229,7 @@ class DealScenarioWidget(QFrame):
         self._transition_ref = data.transition_ref.strip()
         self._read_mode = False
         self._images: list[DealScenarioImageWidget] = []
+        self._collapsed = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -235,19 +237,33 @@ class DealScenarioWidget(QFrame):
         root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         header = QHBoxLayout()
-        self.title_label = QLabel("Сделка")
+        self.collapse_button = QToolButton(self)
+        self.collapse_button.setCheckable(True)
+        self.collapse_button.setChecked(True)
+        self.collapse_button.setArrowType(Qt.ArrowType.DownArrow)
+        self.collapse_button.setAutoRaise(True)
+        self.collapse_button.setToolTip("\u0421\u0432\u0435\u0440\u043d\u0443\u0442\u044c/\u0440\u0430\u0437\u0432\u0435\u0440\u043d\u0443\u0442\u044c \u0441\u0434\u0435\u043b\u043a\u0443")
+        header.addWidget(self.collapse_button)
+
+        self.title_label = QLabel("\u0421\u0434\u0435\u043b\u043a\u0430")
         header.addWidget(self.title_label)
         header.addStretch(1)
-        self.add_image_button = QPushButton("Добавить картинку")
+        self.add_image_button = QPushButton("\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u043a\u0430\u0440\u0442\u0438\u043d\u043a\u0443")
         self.add_image_button.clicked.connect(self._on_add_image_clicked)
         header.addWidget(self.add_image_button)
-        self.paste_image_button = QPushButton("Вставить из буфера")
+        self.paste_image_button = QPushButton("\u0412\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u0438\u0437 \u0431\u0443\u0444\u0435\u0440\u0430")
         self.paste_image_button.clicked.connect(self._on_paste_image_clicked)
         header.addWidget(self.paste_image_button)
-        self.remove_button = QPushButton("Удалить")
+        self.remove_button = QPushButton("\u0423\u0434\u0430\u043b\u0438\u0442\u044c")
         self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self))
         header.addWidget(self.remove_button)
         root.addLayout(header)
+
+        self.content_widget = QWidget(self)
+        content_layout = QVBoxLayout(self.content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(8)
+        root.addWidget(self.content_widget)
 
         self.images_container = QWidget()
         self.images_layout = QGridLayout(self.images_container)
@@ -256,7 +272,7 @@ class DealScenarioWidget(QFrame):
         self.images_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.images_layout.setColumnStretch(0, 1)
         self.images_layout.setColumnStretch(1, 1)
-        root.addWidget(self.images_container)
+        content_layout.addWidget(self.images_container)
 
         tf_row = QHBoxLayout()
         tf_row.addWidget(QLabel("Таймфрейм *"))
@@ -265,24 +281,24 @@ class DealScenarioWidget(QFrame):
         for timeframe in TIMEFRAME_OPTIONS:
             self.timeframe_combo.addItem(timeframe, timeframe)
         tf_row.addWidget(self.timeframe_combo, 1)
-        root.addLayout(tf_row)
+        content_layout.addLayout(tf_row)
 
         transition_row = QHBoxLayout()
         transition_row.addWidget(QLabel("Сценарий перехода *"))
         self.transition_combo = QComboBox()
         self.transition_combo.addItem("Выберите сценарий перехода", "")
         transition_row.addWidget(self.transition_combo, 1)
-        root.addLayout(transition_row)
+        content_layout.addLayout(transition_row)
 
         self.idea_edit = AutoHeightPlainTextEdit(parent=self)
         self.entry_edit = AutoHeightPlainTextEdit(parent=self)
         self.sl_edit = AutoHeightPlainTextEdit(parent=self)
         self.tp_edit = AutoHeightPlainTextEdit(parent=self)
 
-        self._add_text_field(root, _FIELD_DEFINITIONS[0][1], self.idea_edit)
-        self._add_text_field(root, _FIELD_DEFINITIONS[1][1], self.entry_edit)
-        self._add_text_field(root, _FIELD_DEFINITIONS[2][1], self.sl_edit)
-        self._add_text_field(root, _FIELD_DEFINITIONS[3][1], self.tp_edit)
+        self._add_text_field(content_layout, _FIELD_DEFINITIONS[0][1], self.idea_edit)
+        self._add_text_field(content_layout, _FIELD_DEFINITIONS[1][1], self.entry_edit)
+        self._add_text_field(content_layout, _FIELD_DEFINITIONS[2][1], self.sl_edit)
+        self._add_text_field(content_layout, _FIELD_DEFINITIONS[3][1], self.tp_edit)
 
         if data.timeframe:
             index = self.timeframe_combo.findData(data.timeframe)
@@ -306,10 +322,18 @@ class DealScenarioWidget(QFrame):
         self.sl_edit.textChanged.connect(self.changed)
         self.tp_edit.textChanged.connect(self.changed)
 
+        self.collapse_button.toggled.connect(self._on_collapse_toggled)
+        self._on_collapse_toggled(self.collapse_button.isChecked())
+
     @staticmethod
     def _add_text_field(layout: QVBoxLayout, label_text: str, editor: QPlainTextEdit) -> None:
         layout.addWidget(QLabel(label_text))
         layout.addWidget(editor)
+
+    def _on_collapse_toggled(self, expanded: bool) -> None:
+        self._collapsed = not expanded
+        self.content_widget.setVisible(expanded)
+        self.collapse_button.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
 
     def set_index(self, index: int) -> None:
         self.title_label.setText(f"Сделка #{index}")

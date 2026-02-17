@@ -176,6 +176,15 @@ class ScenarioTemplateDialog(QDialog):
         self.title_label.setStyleSheet("font-size: 16px; font-weight: 600;")
         right_layout.addWidget(self.title_label)
 
+        buttons_row = QHBoxLayout()
+        buttons_row.addStretch(1)
+        self.cancel_button = QPushButton("Отмена")
+        self.apply_button = QPushButton("Использовать этот шаблон")
+        buttons_row.addWidget(self.cancel_button)
+        buttons_row.addWidget(self.apply_button)
+        right_layout.addLayout(buttons_row)
+
+
         self.preview_image = QLabel("Изображение шаблона не найдено")
         self.preview_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_image.setFrameShape(QFrame.Shape.StyledPanel)
@@ -187,20 +196,10 @@ class ScenarioTemplateDialog(QDialog):
         self.description_label.setWordWrap(True)
         right_layout.addWidget(self.description_label)
 
-        self.description_source_label = QLabel("")
-        self.description_source_label.setObjectName("muted")
-        self.description_source_label.setWordWrap(True)
-        right_layout.addWidget(self.description_source_label)
-
         controls = QWidget(right_container)
-        controls_layout = QHBoxLayout(controls)
+        controls_layout = QVBoxLayout(controls)
         controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.setSpacing(12)
-
-        left_form_widget = QWidget(controls)
-        left_form = QFormLayout(left_form_widget)
-        left_form.setContentsMargins(0, 0, 0, 0)
-        left_form.setSpacing(6)
+        controls_layout.setSpacing(10)
 
         self.break_sign = QComboBox()
         self.break_tf = QComboBox()
@@ -225,56 +224,59 @@ class ScenarioTemplateDialog(QDialog):
         self.meaning_range_tf = QComboBox()
         self.meaning_range_zone = QComboBox()
 
-        left_form.addRow("Пробой: направление", self.break_sign)
-        left_form.addRow("Пробой: TF", self.break_tf)
-        left_form.addRow("Пробой: элемент", self.break_element)
-        left_form.addRow("Пробой: диапазон", self._row_widget(self.break_range_kind, self.break_range_sign, self.break_range_tf, self.break_range_zone))
+        controls_layout.addWidget(QLabel("\u041a\u043e\u043d\u043a\u0440\u0435\u0442\u043d\u044b\u0435 \u044d\u043b\u0435\u043c\u0435\u043d\u0442\u044b"))
 
-        left_form.addRow("Неэффективность: направление", self.ineff_sign)
-        left_form.addRow("Неэффективность: TF", self.ineff_tf)
-        left_form.addRow("Неэффективность: элемент", self.ineff_element)
-        left_form.addRow("Неэффективность: диапазон", self._row_widget(self.ineff_range_kind, self.ineff_range_sign, self.ineff_range_tf, self.ineff_range_zone))
-
+        left_form_widget = QWidget(controls)
+        left_form = QFormLayout(left_form_widget)
+        left_form.setContentsMargins(0, 0, 0, 0)
+        left_form.setSpacing(6)
+        left_form.addRow("\u041f\u0440\u043e\u0431\u043e\u0439: \u043d\u0430\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435", self.break_sign)
+        left_form.addRow("\u041f\u0440\u043e\u0431\u043e\u0439: TF", self.break_tf)
+        left_form.addRow("\u041f\u0440\u043e\u0431\u043e\u0439: \u044d\u043b\u0435\u043c\u0435\u043d\u0442", self.break_element)
+        left_form.addRow("\u041f\u0440\u043e\u0431\u043e\u0439: \u0434\u0438\u0430\u043f\u0430\u0437\u043e\u043d", self._row_widget(self.break_range_kind, self.break_range_sign, self.break_range_tf, self.break_range_zone))
+        left_form.addRow("\u041d\u0435\u044d\u0444\u0444\u0435\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c: \u043d\u0430\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435", self.ineff_sign)
+        left_form.addRow("\u041d\u0435\u044d\u0444\u0444\u0435\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c: TF", self.ineff_tf)
+        left_form.addRow("\u041d\u0435\u044d\u0444\u0444\u0435\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c: \u044d\u043b\u0435\u043c\u0435\u043d\u0442", self.ineff_element)
+        left_form.addRow("\u041d\u0435\u044d\u0444\u0444\u0435\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c: \u0434\u0438\u0430\u043f\u0430\u0437\u043e\u043d", self._row_widget(self.ineff_range_kind, self.ineff_range_sign, self.ineff_range_tf, self.ineff_range_zone))
         left_form.addRow("ADV: BUY/SELL", self.meaning_side)
         left_form.addRow("ADV: UP/DOWN", self.meaning_level)
-        left_form.addRow("ADV: диапазон", self._row_widget(self.meaning_range_kind, self.meaning_range_sign, self.meaning_range_tf, self.meaning_range_zone))
-
-        controls_layout.addWidget(left_form_widget, 1)
-
-        right_form_widget = QWidget(controls)
-        right_form = QFormLayout(right_form_widget)
-        right_form.setContentsMargins(0, 0, 0, 0)
-        right_form.setSpacing(6)
-
-        self.idea_edit = self._create_text_edit(72)
-        self.entry_edit = self._create_text_edit(72)
-        self.sl_edit = self._create_text_edit(72)
-        self.tp_edit = self._create_text_edit(72)
+        left_form.addRow("ADV: \u0434\u0438\u0430\u043f\u0430\u0437\u043e\u043d", self._row_widget(self.meaning_range_kind, self.meaning_range_sign, self.meaning_range_tf, self.meaning_range_zone))
+        controls_layout.addWidget(left_form_widget, 0)
 
         self.transition_notation_preview = self._create_text_edit(52, read_only=True)
         self.meaning_notation_preview = self._create_text_edit(52, read_only=True)
         self.transition_text_preview = self._create_text_edit(78, read_only=True)
         self.meaning_text_preview = self._create_text_edit(78, read_only=True)
 
-        right_form.addRow("Идея сделки", self.idea_edit)
-        right_form.addRow("Entry", self.entry_edit)
-        right_form.addRow("SL", self.sl_edit)
-        right_form.addRow("TP", self.tp_edit)
-        right_form.addRow("Нотация перехода", self.transition_notation_preview)
-        right_form.addRow("Нотация значения", self.meaning_notation_preview)
-        right_form.addRow("Текст перехода", self.transition_text_preview)
-        right_form.addRow("Текст значения", self.meaning_text_preview)
+        notation_form_widget = QWidget(controls)
+        notation_form = QFormLayout(notation_form_widget)
+        notation_form.setContentsMargins(0, 0, 0, 0)
+        notation_form.setSpacing(6)
+        notation_form.addRow("\u041d\u043e\u0442\u0430\u0446\u0438\u044f \u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0430", self.transition_notation_preview)
+        notation_form.addRow("\u041d\u043e\u0442\u0430\u0446\u0438\u044f \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f", self.meaning_notation_preview)
+        notation_form.addRow("\u0422\u0435\u043a\u0441\u0442 \u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0430", self.transition_text_preview)
+        notation_form.addRow("\u0422\u0435\u043a\u0441\u0442 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f", self.meaning_text_preview)
+        controls_layout.addWidget(notation_form_widget, 0)
 
-        controls_layout.addWidget(right_form_widget, 1)
+        controls_layout.addWidget(QLabel("\u0415\u0441\u0442\u0435\u0441\u0442\u0432\u0435\u043d\u043d\u044b\u0439 \u0442\u0435\u043a\u0441\u0442"))
+
+        self.idea_edit = self._create_text_edit(72)
+        self.entry_edit = self._create_text_edit(72)
+        self.sl_edit = self._create_text_edit(72)
+        self.tp_edit = self._create_text_edit(72)
+
+        text_form_widget = QWidget(controls)
+        text_form = QFormLayout(text_form_widget)
+        text_form.setContentsMargins(0, 0, 0, 0)
+        text_form.setSpacing(6)
+        text_form.addRow("\u0418\u0434\u0435\u044f \u0441\u0434\u0435\u043b\u043a\u0438", self.idea_edit)
+        text_form.addRow("Entry", self.entry_edit)
+        text_form.addRow("SL", self.sl_edit)
+        text_form.addRow("TP", self.tp_edit)
+        controls_layout.addWidget(text_form_widget, 1)
+
         right_layout.addWidget(controls, 1)
 
-        buttons_row = QHBoxLayout()
-        buttons_row.addStretch(1)
-        self.cancel_button = QPushButton("Отмена")
-        self.apply_button = QPushButton("Использовать этот шаблон")
-        buttons_row.addWidget(self.cancel_button)
-        buttons_row.addWidget(self.apply_button)
-        right_layout.addLayout(buttons_row)
 
         splitter.addWidget(right_container)
         splitter.setStretchFactor(0, 0)
@@ -332,7 +334,6 @@ class ScenarioTemplateDialog(QDialog):
         else:
             self.title_label.setText("Шаблоны не найдены")
             self.description_label.setText("Добавьте json-файлы в папку app/ui/templates.")
-            self.description_source_label.clear()
 
     def _on_template_selected(self, row: int) -> None:
         if row < 0 or row >= len(self._templates):
@@ -350,9 +351,6 @@ class ScenarioTemplateDialog(QDialog):
     def _render_template(self, template: ScenarioTemplate) -> None:
         self.title_label.setText(template.name)
         self.description_label.setText(template.description)
-        self.description_source_label.setText(
-            f"Описание шаблона редактируется в: {template.file_path.as_posix()} (поле description)"
-        )
         if template.image_path and template.image_path.exists():
             pixmap = QPixmap(str(template.image_path))
             if not pixmap.isNull():
@@ -483,6 +481,24 @@ class ScenarioTemplateDialog(QDialog):
         self._result = TemplateApplyResult(transition_data=transition_data, deal_data=deal_data)
         self.accept()
 
+    @staticmethod
+    def _range_kind_to_text(value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized == "ACTUAL":
+            return "\u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u043e\u0433\u043e"
+        if normalized == "PREV":
+            return "\u043f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0435\u0433\u043e"
+        return value
+
+    @staticmethod
+    def _side_to_text(value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized == "BUY":
+            return "\u043f\u043e\u043a\u0443\u043f\u0430\u0442\u0435\u043b\u0435\u0439"
+        if normalized == "SELL":
+            return "\u043f\u0440\u043e\u0434\u0430\u0432\u0446\u043e\u0432"
+        return value
+
     def _build_notations(self) -> tuple[str, str]:
         values = self._control_values()
         template = self._current_template
@@ -546,6 +562,7 @@ class ScenarioTemplateDialog(QDialog):
             "breakout_tf": breakout_tf,
             "breakout_element": breakout_element,
             "breakout_range_kind": breakout_range_kind,
+            "breakout_range_kind_ru": self._range_kind_to_text(breakout_range_kind),
             "breakout_range_sign": breakout_range_sign,
             "breakout_range_tf": breakout_range_tf,
             "breakout_range_zone": breakout_range_zone,
@@ -553,12 +570,15 @@ class ScenarioTemplateDialog(QDialog):
             "inefficiency_tf": inefficiency_tf,
             "inefficiency_element": inefficiency_element,
             "inefficiency_range_kind": inefficiency_range_kind,
+            "inefficiency_range_kind_ru": self._range_kind_to_text(inefficiency_range_kind),
             "inefficiency_range_sign": inefficiency_range_sign,
             "inefficiency_range_tf": inefficiency_range_tf,
             "inefficiency_range_zone": inefficiency_range_zone,
             "side": side,
+            "side_ru": self._side_to_text(side),
             "level": level,
             "meaning_range_kind": meaning_range_kind,
+            "meaning_range_kind_ru": self._range_kind_to_text(meaning_range_kind),
             "meaning_range_sign": meaning_range_sign,
             "meaning_range_tf": meaning_range_tf,
             "meaning_range_zone": meaning_range_zone,

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QToolButton,
     QMessageBox,
     QSizePolicy,
     QVBoxLayout,
@@ -822,6 +823,7 @@ class TransitionScenarioImageWidget(QFrame):
         self.timeframe_combo.currentIndexChanged.connect(lambda _: self.changed.emit())
         self._update_image_preview()
 
+
     def set_index(self, index: int) -> None:
         self.title_label.setText(f"Картинка #{index}")
 
@@ -917,6 +919,7 @@ class TransitionScenarioWidget(QFrame):
         self._images: list[TransitionScenarioImageWidget] = []
         self._auto_generated_scenario_text = ""
         self._auto_generated_meaning_text = ""
+        self._collapsed = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -924,19 +927,33 @@ class TransitionScenarioWidget(QFrame):
         root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         header = QHBoxLayout()
-        self.title_label = QLabel("Сценарий")
+        self.collapse_button = QToolButton(self)
+        self.collapse_button.setCheckable(True)
+        self.collapse_button.setChecked(True)
+        self.collapse_button.setArrowType(Qt.ArrowType.DownArrow)
+        self.collapse_button.setAutoRaise(True)
+        self.collapse_button.setToolTip("\u0421\u0432\u0435\u0440\u043d\u0443\u0442\u044c/\u0440\u0430\u0437\u0432\u0435\u0440\u043d\u0443\u0442\u044c \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0439")
+        header.addWidget(self.collapse_button)
+
+        self.title_label = QLabel("\u0421\u0446\u0435\u043d\u0430\u0440\u0438\u0439")
         header.addWidget(self.title_label)
         header.addStretch(1)
-        self.add_image_button = QPushButton("Добавить картинку")
+        self.add_image_button = QPushButton("\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u043a\u0430\u0440\u0442\u0438\u043d\u043a\u0443")
         self.add_image_button.clicked.connect(self._on_add_image_clicked)
         header.addWidget(self.add_image_button)
-        self.paste_image_button = QPushButton("Вставить из буфера")
+        self.paste_image_button = QPushButton("\u0412\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u0438\u0437 \u0431\u0443\u0444\u0435\u0440\u0430")
         self.paste_image_button.clicked.connect(self._on_paste_image_clicked)
         header.addWidget(self.paste_image_button)
-        self.remove_button = QPushButton("Удалить")
+        self.remove_button = QPushButton("\u0423\u0434\u0430\u043b\u0438\u0442\u044c")
         self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self))
         header.addWidget(self.remove_button)
         root.addLayout(header)
+
+        self.content_widget = QWidget(self)
+        content_layout = QVBoxLayout(self.content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(8)
+        root.addWidget(self.content_widget)
 
         self.images_container = QWidget()
         self.images_layout = QGridLayout(self.images_container)
@@ -945,18 +962,18 @@ class TransitionScenarioWidget(QFrame):
         self.images_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.images_layout.setColumnStretch(0, 1)
         self.images_layout.setColumnStretch(1, 1)
-        root.addWidget(self.images_container)
+        content_layout.addWidget(self.images_container)
 
         self.notation_label = QLabel("Нотация *")
-        root.addWidget(self.notation_label)
+        content_layout.addWidget(self.notation_label)
         self.notation_edit = TransitionNotationEdit()
-        root.addWidget(self.notation_edit)
+        content_layout.addWidget(self.notation_edit)
 
         self.notation_status = QLabel("")
-        root.addWidget(self.notation_status)
+        content_layout.addWidget(self.notation_status)
 
         self.scenario_text_label = QLabel("Сценарий перехода к сделке *")
-        root.addWidget(self.scenario_text_label)
+        content_layout.addWidget(self.scenario_text_label)
 
         self.scenario_text_edit = QPlainTextEdit()
         self.scenario_text_edit.setPlaceholderText("Расшифрованный текст нотации (можно редактировать).")
@@ -964,19 +981,19 @@ class TransitionScenarioWidget(QFrame):
         self.scenario_text_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.scenario_text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scenario_text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        root.addWidget(self.scenario_text_edit)
+        content_layout.addWidget(self.scenario_text_edit)
 
         self.meaning_label = QLabel("Что это будет означать?")
-        root.addWidget(self.meaning_label)
+        content_layout.addWidget(self.meaning_label)
 
         self.meaning_notation_edit = TransitionMeaningNotationEdit()
-        root.addWidget(self.meaning_notation_edit)
+        content_layout.addWidget(self.meaning_notation_edit)
 
         self.meaning_status = QLabel("")
-        root.addWidget(self.meaning_status)
+        content_layout.addWidget(self.meaning_status)
 
         self.meaning_text_label = QLabel("\u0427\u0442\u043e \u044d\u0442\u043e \u0431\u0443\u0434\u0435\u0442 \u043e\u0437\u043d\u0430\u0447\u0430\u0442\u044c? *")
-        root.addWidget(self.meaning_text_label)
+        content_layout.addWidget(self.meaning_text_label)
 
         self.meaning_text_edit = QPlainTextEdit()
         self.meaning_text_edit.setPlaceholderText(
@@ -988,10 +1005,10 @@ class TransitionScenarioWidget(QFrame):
         self.meaning_text_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.meaning_text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.meaning_text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        root.addWidget(self.meaning_text_edit)
+        content_layout.addWidget(self.meaning_text_edit)
 
         self.why_label = QLabel("Почему?")
-        root.addWidget(self.why_label)
+        content_layout.addWidget(self.why_label)
 
         self.manual_edit = QPlainTextEdit()
         self.manual_edit.setPlaceholderText("Объясните, почему это верная интерпретация")
@@ -1000,7 +1017,7 @@ class TransitionScenarioWidget(QFrame):
         self.manual_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.manual_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.manual_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        root.addWidget(self.manual_edit)
+        content_layout.addWidget(self.manual_edit)
 
         initial_images = data.images if data.images else [TransitionScenarioImageData(image_path="")]
         for image_data in initial_images:
@@ -1028,6 +1045,14 @@ class TransitionScenarioWidget(QFrame):
         self.meaning_notation_edit.textChanged.connect(self._on_meaning_notation_changed)
         self.meaning_text_edit.textChanged.connect(self.changed)
         self.manual_edit.textChanged.connect(self.changed)
+
+        self.collapse_button.toggled.connect(self._on_collapse_toggled)
+        self._on_collapse_toggled(self.collapse_button.isChecked())
+
+    def _on_collapse_toggled(self, expanded: bool) -> None:
+        self._collapsed = not expanded
+        self.content_widget.setVisible(expanded)
+        self.collapse_button.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
 
     def set_index(self, index: int) -> None:
         self.title_label.setText(f"Сценарий #{index}")

@@ -50,9 +50,10 @@ def main() -> int:
     if not icon.isNull():
         window.setWindowIcon(icon)
 
-    window.show()
+    window.showMaximized()
     return app.exec()
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
