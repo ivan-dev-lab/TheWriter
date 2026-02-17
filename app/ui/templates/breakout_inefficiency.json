@@ -1,7 +1,7 @@
 {
   "id": "breakout_inefficiency",
   "name": "Пробой области с образованием неэффективности",
-  "description": "Описание редактируется в этом файле: app/ui/templates/breakout_inefficiency.json, поле description.",
+  "description": "Если при пробое проблемной области на старшем таймфрейме на младшем таймфрейме возникает признак неэффективности, то преимущество можно закреплять за стороной, сформировавшей эту неэффективность. В таком случае вход в сделку считается обоснованным.",
   "image": "template_breakout.jpg",
   "random_options": {
     "signs": ["+", "-"],
@@ -16,11 +16,15 @@
     "breakout_range_kind": "PREV",
     "inefficiency_range_kind": "ACTUAL"
   },
+  "notation_templates": {
+    "transition": "CREATE {breakout_sign} {breakout_tf} {breakout_element} {breakout_range_kind} {breakout_range_sign} {breakout_range_tf} DR {breakout_range_zone} WITH {inefficiency_sign} {inefficiency_tf} {inefficiency_element} {inefficiency_range_kind} {inefficiency_range_sign} {inefficiency_range_tf} DR {inefficiency_range_zone} BREAK",
+    "meaning": "ADV {side} {level} {meaning_range_kind} {meaning_range_sign} {meaning_range_tf} DR {meaning_range_zone}"
+  },
   "text_templates": {
-    "why": "Шаблон \"{template_name}\" выбран: подтверждение ожидаем через сочетание пробоя и неэффективности.",
-    "idea": "Сценарий сделки: {transition_text}",
-    "entry": "Вход только после подтверждения сценария. База: {meaning_text}",
-    "sl": "SL размещается за уровнем, который отменяет сценарий {template_name}.",
-    "tp": "TP ведется в направлении {side} / {level} согласно сценарию: {meaning_text}"
+    "why": "Если при подходе и взаимодействии цены со старшей проблемной областью [{breakout_sign}{breakout_tf} {breakout_element}], расположенной в {breakout_range_zone}  {breakout_range_kind} [{breakout_range_sign}{breakout_range_tf}], на {inefficiency_tf} ТФ сформируется неэффективность [{inefficiency_sign}{inefficiency_tf} {inefficiency_element}], то это будет явным признаком преимущества {side}. После фиксации этого признака вход в сделку по направлению неэффективной стороны допускается.",
+    "idea": "После формирования неэффективности {side} в момент пробития [{inefficiency_sign}{inefficiency_tf} {inefficiency_element}] логично ожидать дальнейшую доставку цены до ...",
+    "entry": "Конкретная точка входа будет определена после формирования [{inefficiency_sign}{inefficiency_tf} {inefficiency_element}]. Предварительно планируется вход лимитным ордером от [{inefficiency_sign}{inefficiency_tf} {inefficiency_element}] - элемента неэффективности. С учётом идеи сделки более выгодного и логичного размещения точки входа не предусмотрено.",
+    "sl": "SL расположен за [{inefficiency_sign}{inefficiency_tf} {inefficiency_element}], который должен сформироваться в процессе пробития [{breakout_sign}{breakout_tf} {breakout_element}]. Образованный элемент неэффективности рассматривается как ключевая область и маркер силы {side}.В случае пробития [{inefficiency_sign}{inefficiency_tf} {inefficiency_element}] сценарий о преимуществе {side} в отметках проблемной области [{breakout_sign}{breakout_tf} {breakout_element}] считается отменённым",
+    "tp": "..."
   }
 }

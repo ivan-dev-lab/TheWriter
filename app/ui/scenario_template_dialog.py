@@ -26,10 +26,9 @@ from PySide6.QtWidgets import (
 )
 
 from .current_situation import ELEMENT_OPTIONS, TIMEFRAME_OPTIONS
-from .deal_scenarios import DealScenarioData, DealScenarioImageData
+from .deal_scenarios import DealScenarioData
 from .transition_scenarios import (
     TransitionScenarioData,
-    TransitionScenarioImageData,
     transition_meaning_notation_to_text,
     transition_notation_to_text,
 )
@@ -42,6 +41,10 @@ class _SafeDict(dict):
         return "{" + key + "}"
 
 
+def _format_template(template: str, context: dict[str, Any]) -> str:
+    return template.format_map(_SafeDict(context))
+
+
 @dataclass(slots=True)
 class ScenarioTemplate:
     file_path: Path
@@ -51,6 +54,7 @@ class ScenarioTemplate:
     image_path: Path
     random_options: dict[str, list[str]]
     defaults: dict[str, str]
+    notation_templates: dict[str, str]
     text_templates: dict[str, str]
 
     @property
@@ -60,7 +64,7 @@ class ScenarioTemplate:
     @staticmethod
     def from_file(path: Path) -> ScenarioTemplate | None:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError):
             return None
 
@@ -87,6 +91,11 @@ class ScenarioTemplate:
             defaults_raw = {}
         defaults = {str(key): str(value).strip() for key, value in defaults_raw.items()}
 
+        notation_templates_raw = payload.get("notation_templates")
+        if not isinstance(notation_templates_raw, dict):
+            notation_templates_raw = {}
+        notation_templates = {str(key): str(value) for key, value in notation_templates_raw.items()}
+
         text_templates_raw = payload.get("text_templates")
         if not isinstance(text_templates_raw, dict):
             text_templates_raw = {}
@@ -100,6 +109,7 @@ class ScenarioTemplate:
             image_path=image_path,
             random_options=normalized_random,
             defaults=defaults,
+            notation_templates=notation_templates,
             text_templates=text_templates,
         )
 
@@ -133,6 +143,12 @@ class ScenarioTemplateDialog(QDialog):
         self._templates = load_scenario_templates()
         self._current_template: ScenarioTemplate | None = None
         self._result: TemplateApplyResult | None = None
+        self._auto_generated_texts: dict[str, str] = {
+            "idea": "",
+            "entry": "",
+            "sl": "",
+            "tp": "",
+        }
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -299,7 +315,7 @@ class ScenarioTemplateDialog(QDialog):
             self.meaning_range_zone,
         ]
         for combo in combos:
-            combo.currentIndexChanged.connect(self._update_notation_previews)
+            combo.currentIndexChanged.connect(self._on_controls_changed)
 
     def _load_templates_to_list(self) -> None:
         self.templates_list.clear()
@@ -324,8 +340,12 @@ class ScenarioTemplateDialog(QDialog):
         self._current_template = self._templates[row]
         self._render_template(self._current_template)
         self._fill_random_values(self._current_template)
-        self._apply_default_texts(self._current_template)
+        self._sync_auto_text_templates(force=True)
         self._update_notation_previews()
+
+    def _on_controls_changed(self) -> None:
+        self._update_notation_previews()
+        self._sync_auto_text_templates(force=False)
 
     def _render_template(self, template: ScenarioTemplate) -> None:
         self.title_label.setText(template.name)
@@ -373,21 +393,33 @@ class ScenarioTemplateDialog(QDialog):
 
         self._fill_combo(self.meaning_side, sides, random.choice(sides))
         self._fill_combo(self.meaning_level, levels, random.choice(levels))
-        self._fill_combo(
-            self.meaning_range_kind,
-            range_kinds,
-            random.choice(range_kinds),
-        )
+        self._fill_combo(self.meaning_range_kind, range_kinds, random.choice(range_kinds))
         self._fill_combo(self.meaning_range_sign, signs, random.choice(signs))
         self._fill_combo(self.meaning_range_tf, tfs, random.choice(tfs))
         self._fill_combo(self.meaning_range_zone, zones, random.choice(zones))
 
-    def _apply_default_texts(self, template: ScenarioTemplate) -> None:
+    def _sync_auto_text_templates(self, force: bool) -> None:
+        template = self._current_template
+        if template is None:
+            return
         context = self._template_context()
-        self.idea_edit.setPlainText(template.text_templates.get("idea", "").format_map(_SafeDict(context)).strip())
-        self.entry_edit.setPlainText(template.text_templates.get("entry", "").format_map(_SafeDict(context)).strip())
-        self.sl_edit.setPlainText(template.text_templates.get("sl", "").format_map(_SafeDict(context)).strip())
-        self.tp_edit.setPlainText(template.text_templates.get("tp", "").format_map(_SafeDict(context)).strip())
+        mapping = [
+            ("idea", self.idea_edit),
+            ("entry", self.entry_edit),
+            ("sl", self.sl_edit),
+            ("tp", self.tp_edit),
+        ]
+        for key, editor in mapping:
+            template_text = template.text_templates.get(key, "")
+            generated = _format_template(template_text, context).strip() if template_text else ""
+            current = editor.toPlainText().strip()
+            previous_generated = self._auto_generated_texts.get(key, "")
+            should_overwrite = force or not current or current == previous_generated
+            self._auto_generated_texts[key] = generated
+            if should_overwrite and current != generated:
+                editor.blockSignals(True)
+                editor.setPlainText(generated)
+                editor.blockSignals(False)
 
     def _update_notation_previews(self) -> None:
         transition_notation, meaning_notation = self._build_notations()
@@ -413,6 +445,7 @@ class ScenarioTemplateDialog(QDialog):
             QMessageBox.warning(self, "Шаблоны", "Выберите шаблон.")
             return
 
+        self._sync_auto_text_templates(force=False)
         transition_notation, meaning_notation = self._build_notations()
         transition_text, transition_error = transition_notation_to_text(transition_notation)
         if transition_error or not transition_text:
@@ -425,12 +458,11 @@ class ScenarioTemplateDialog(QDialog):
             return
 
         context = self._template_context()
-        why_text = template.text_templates.get("why", "").format_map(_SafeDict(context)).strip()
-        image_path = str(template.image_path) if template.image_path else ""
-        deal_timeframe = self.break_tf.currentData() or self.break_tf.currentText()
+        why_text = _format_template(template.text_templates.get("why", ""), context).strip()
+        deal_timeframe = str(self.break_tf.currentData() or self.break_tf.currentText()).upper()
 
         transition_data = TransitionScenarioData(
-            images=[TransitionScenarioImageData(image_path=image_path, timeframe=str(deal_timeframe))],
+            images=[],
             notation=transition_notation,
             scenario_text=transition_text.strip(),
             meaning_notation=meaning_notation,
@@ -439,8 +471,8 @@ class ScenarioTemplateDialog(QDialog):
         )
 
         deal_data = DealScenarioData(
-            images=[DealScenarioImageData(image_path=image_path)],
-            timeframe=str(deal_timeframe),
+            images=[],
+            timeframe=deal_timeframe,
             transition_ref=transition_notation,
             idea=self.idea_edit.toPlainText().strip(),
             entry=self.entry_edit.toPlainText().strip(),
@@ -452,62 +484,104 @@ class ScenarioTemplateDialog(QDialog):
         self.accept()
 
     def _build_notations(self) -> tuple[str, str]:
-        break_sign = self.break_sign.currentData() or self.break_sign.currentText()
-        break_tf = self.break_tf.currentData() or self.break_tf.currentText()
-        break_element = self.break_element.currentData() or self.break_element.currentText()
-        break_range_kind = self.break_range_kind.currentData() or self.break_range_kind.currentText()
-        break_range_sign = self.break_range_sign.currentData() or self.break_range_sign.currentText()
-        break_range_tf = self.break_range_tf.currentData() or self.break_range_tf.currentText()
-        break_range_zone = self.break_range_zone.currentData() or self.break_range_zone.currentText()
+        values = self._control_values()
+        template = self._current_template
 
-        ineff_sign = self.ineff_sign.currentData() or self.ineff_sign.currentText()
-        ineff_tf = self.ineff_tf.currentData() or self.ineff_tf.currentText()
-        ineff_element = self.ineff_element.currentData() or self.ineff_element.currentText()
-        ineff_range_kind = self.ineff_range_kind.currentData() or self.ineff_range_kind.currentText()
-        ineff_range_sign = self.ineff_range_sign.currentData() or self.ineff_range_sign.currentText()
-        ineff_range_tf = self.ineff_range_tf.currentData() or self.ineff_range_tf.currentText()
-        ineff_range_zone = self.ineff_range_zone.currentData() or self.ineff_range_zone.currentText()
+        transition_template = ""
+        meaning_template = ""
+        if template is not None:
+            transition_template = template.notation_templates.get("transition", "")
+            meaning_template = template.notation_templates.get("meaning", "")
 
-        side = self.meaning_side.currentData() or self.meaning_side.currentText()
-        level = self.meaning_level.currentData() or self.meaning_level.currentText()
-        meaning_range_kind = self.meaning_range_kind.currentData() or self.meaning_range_kind.currentText()
-        meaning_range_sign = self.meaning_range_sign.currentData() or self.meaning_range_sign.currentText()
-        meaning_range_tf = self.meaning_range_tf.currentData() or self.meaning_range_tf.currentText()
-        meaning_range_zone = self.meaning_range_zone.currentData() or self.meaning_range_zone.currentText()
+        if transition_template.strip():
+            transition_notation = _format_template(transition_template, values).strip()
+        else:
+            transition_notation = (
+                "CREATE "
+                f"{values['breakout_sign']} {values['breakout_tf']} {values['breakout_element']} "
+                f"{values['breakout_range_kind']} {values['breakout_range_sign']} {values['breakout_range_tf']} DR {values['breakout_range_zone']} "
+                "WITH "
+                f"{values['inefficiency_sign']} {values['inefficiency_tf']} {values['inefficiency_element']} "
+                f"{values['inefficiency_range_kind']} {values['inefficiency_range_sign']} {values['inefficiency_range_tf']} DR {values['inefficiency_range_zone']} "
+                "BREAK"
+            )
 
-        transition_notation = (
-            "CREATE "
-            f"{break_sign} {str(break_tf).upper()} {break_element} "
-            f"{str(break_range_kind).upper()} {break_range_sign} {str(break_range_tf).upper()} DR {break_range_zone} "
-            "WITH "
-            f"{ineff_sign} {str(ineff_tf).upper()} {ineff_element} "
-            f"{str(ineff_range_kind).upper()} {ineff_range_sign} {str(ineff_range_tf).upper()} DR {ineff_range_zone} "
-            "BREAK"
-        )
-        meaning_notation = (
-            "ADV "
-            f"{str(side).upper()} {str(level).upper()} "
-            f"{str(meaning_range_kind).upper()} {meaning_range_sign} {str(meaning_range_tf).upper()} DR {meaning_range_zone}"
-        )
+        if meaning_template.strip():
+            meaning_notation = _format_template(meaning_template, values).strip()
+        else:
+            meaning_notation = (
+                "ADV "
+                f"{values['side']} {values['level']} "
+                f"{values['meaning_range_kind']} {values['meaning_range_sign']} {values['meaning_range_tf']} DR {values['meaning_range_zone']}"
+            )
+
         return transition_notation, meaning_notation
 
+    def _control_values(self) -> dict[str, str]:
+        breakout_sign = str(self.break_sign.currentData() or self.break_sign.currentText())
+        breakout_tf = str(self.break_tf.currentData() or self.break_tf.currentText()).upper()
+        breakout_element = str(self.break_element.currentData() or self.break_element.currentText())
+        breakout_range_kind = str(self.break_range_kind.currentData() or self.break_range_kind.currentText()).upper()
+        breakout_range_sign = str(self.break_range_sign.currentData() or self.break_range_sign.currentText())
+        breakout_range_tf = str(self.break_range_tf.currentData() or self.break_range_tf.currentText()).upper()
+        breakout_range_zone = str(self.break_range_zone.currentData() or self.break_range_zone.currentText())
+
+        inefficiency_sign = str(self.ineff_sign.currentData() or self.ineff_sign.currentText())
+        inefficiency_tf = str(self.ineff_tf.currentData() or self.ineff_tf.currentText()).upper()
+        inefficiency_element = str(self.ineff_element.currentData() or self.ineff_element.currentText())
+        inefficiency_range_kind = str(self.ineff_range_kind.currentData() or self.ineff_range_kind.currentText()).upper()
+        inefficiency_range_sign = str(self.ineff_range_sign.currentData() or self.ineff_range_sign.currentText())
+        inefficiency_range_tf = str(self.ineff_range_tf.currentData() or self.ineff_range_tf.currentText()).upper()
+        inefficiency_range_zone = str(self.ineff_range_zone.currentData() or self.ineff_range_zone.currentText())
+
+        side = str(self.meaning_side.currentData() or self.meaning_side.currentText()).upper()
+        level = str(self.meaning_level.currentData() or self.meaning_level.currentText()).upper()
+        meaning_range_kind = str(self.meaning_range_kind.currentData() or self.meaning_range_kind.currentText()).upper()
+        meaning_range_sign = str(self.meaning_range_sign.currentData() or self.meaning_range_sign.currentText())
+        meaning_range_tf = str(self.meaning_range_tf.currentData() or self.meaning_range_tf.currentText()).upper()
+        meaning_range_zone = str(self.meaning_range_zone.currentData() or self.meaning_range_zone.currentText())
+
+        return {
+            "breakout_sign": breakout_sign,
+            "breakout_tf": breakout_tf,
+            "breakout_element": breakout_element,
+            "breakout_range_kind": breakout_range_kind,
+            "breakout_range_sign": breakout_range_sign,
+            "breakout_range_tf": breakout_range_tf,
+            "breakout_range_zone": breakout_range_zone,
+            "inefficiency_sign": inefficiency_sign,
+            "inefficiency_tf": inefficiency_tf,
+            "inefficiency_element": inefficiency_element,
+            "inefficiency_range_kind": inefficiency_range_kind,
+            "inefficiency_range_sign": inefficiency_range_sign,
+            "inefficiency_range_tf": inefficiency_range_tf,
+            "inefficiency_range_zone": inefficiency_range_zone,
+            "side": side,
+            "level": level,
+            "meaning_range_kind": meaning_range_kind,
+            "meaning_range_sign": meaning_range_sign,
+            "meaning_range_tf": meaning_range_tf,
+            "meaning_range_zone": meaning_range_zone,
+        }
+
     def _template_context(self) -> dict[str, Any]:
+        values = self._control_values()
         transition_notation, meaning_notation = self._build_notations()
         transition_text, _ = transition_notation_to_text(transition_notation)
         meaning_text, _ = transition_meaning_notation_to_text(meaning_notation)
-        return {
-            "template_name": self._current_template.name if self._current_template else "",
-            "transition_notation": transition_notation,
-            "meaning_notation": meaning_notation,
-            "transition_text": (transition_text or "").strip(),
-            "meaning_text": (meaning_text or "").strip(),
-            "breakout_tf": str(self.break_tf.currentData() or self.break_tf.currentText()).upper(),
-            "inefficiency_tf": str(self.ineff_tf.currentData() or self.ineff_tf.currentText()).upper(),
-            "breakout_element": str(self.break_element.currentData() or self.break_element.currentText()),
-            "inefficiency_element": str(self.ineff_element.currentData() or self.ineff_element.currentText()),
-            "side": str(self.meaning_side.currentData() or self.meaning_side.currentText()).upper(),
-            "level": str(self.meaning_level.currentData() or self.meaning_level.currentText()).upper(),
-        }
+
+        context: dict[str, Any] = dict(values)
+        context.update(
+            {
+                "template_name": self._current_template.name if self._current_template else "",
+                "template_id": self._current_template.template_id if self._current_template else "",
+                "transition_notation": transition_notation,
+                "meaning_notation": meaning_notation,
+                "transition_text": (transition_text or "").strip(),
+                "meaning_text": (meaning_text or "").strip(),
+            }
+        )
+        return context
 
     @staticmethod
     def _create_text_edit(min_height: int, read_only: bool = False) -> QPlainTextEdit:
@@ -539,3 +613,4 @@ class ScenarioTemplateDialog(QDialog):
         for widget in widgets:
             row_layout.addWidget(widget)
         return row
+
