@@ -29,7 +29,7 @@ from .image_clipboard import image_path_from_clipboard
 
 _IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
 _MEANING_RE = re.compile(
-    r"^(ADV|NOT[\s_]+ADV)\s+(BUY|SELL)\s+(UP|LOW)\s+(.+)$",
+    r"^(ADV|NOT[\s_]+ADV)\s+(BUY|SELL)\s+(UP|LOW|DOWN)\s+(.+)$",
     re.IGNORECASE,
 )
 _MEANING_RANGE_RE = re.compile(
@@ -48,7 +48,7 @@ _ACTION_HELP = (
     "или GET/NOT GET +/- TF Element ACTUAL/PREV +/- TF DR Premium/Discount/Equilibrium"
 )
 _MEANING_HELP = (
-    "ADV/NOT ADV BUY/SELL UP/LOW (+/- TF Element | ACTUAL/PREV +/- TF DR Premium/Discount/Equilibrium)"
+    "ADV/NOT ADV BUY/SELL UP/DOWN (+/- TF Element | ACTUAL/PREV +/- TF DR Premium/Discount/Equilibrium)"
 )
 _ZONE_OPTIONS = ["Premium", "Discount", "Equilibrium"]
 
@@ -548,7 +548,7 @@ class TransitionMeaningNotationEdit(QLineEdit):
     _ACTION_FIRST_OPTIONS = ["ADV", "NOT"]
     _ACTION_AFTER_NOT_OPTIONS = ["ADV"]
     _SIDE_OPTIONS = ["BUY", "SELL"]
-    _LEVEL_OPTIONS = ["UP", "LOW"]
+    _LEVEL_OPTIONS = ["UP", "DOWN", "LOW"]
     _RANGE_KIND_OPTIONS = ["ACTUAL", "PREV"]
     _ZONE_OPTIONS = _ZONE_OPTIONS
     _TIMEFRAME_OPTIONS_NORMALIZED = {item.upper() for item in TIMEFRAME_OPTIONS}
@@ -758,7 +758,9 @@ class TransitionScenarioImageData:
 class TransitionScenarioData:
     images: list[TransitionScenarioImageData] = field(default_factory=list)
     notation: str = ""
+    scenario_text: str = ""
     meaning_notation: str = ""
+    meaning_text: str = ""
     why_text: str = ""
 
 
@@ -913,6 +915,8 @@ class TransitionScenarioWidget(QFrame):
         self._follow_up_visible = False
         self._read_mode = False
         self._images: list[TransitionScenarioImageWidget] = []
+        self._auto_generated_scenario_text = ""
+        self._auto_generated_meaning_text = ""
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -951,6 +955,17 @@ class TransitionScenarioWidget(QFrame):
         self.notation_status = QLabel("")
         root.addWidget(self.notation_status)
 
+        self.scenario_text_label = QLabel("Сценарий перехода к сделке *")
+        root.addWidget(self.scenario_text_label)
+
+        self.scenario_text_edit = QPlainTextEdit()
+        self.scenario_text_edit.setPlaceholderText("Расшифрованный текст нотации (можно редактировать).")
+        self.scenario_text_edit.setMinimumHeight(110)
+        self.scenario_text_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.scenario_text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scenario_text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        root.addWidget(self.scenario_text_edit)
+
         self.meaning_label = QLabel("Что это будет означать?")
         root.addWidget(self.meaning_label)
 
@@ -959,6 +974,21 @@ class TransitionScenarioWidget(QFrame):
 
         self.meaning_status = QLabel("")
         root.addWidget(self.meaning_status)
+
+        self.meaning_text_label = QLabel("\u0427\u0442\u043e \u044d\u0442\u043e \u0431\u0443\u0434\u0435\u0442 \u043e\u0437\u043d\u0430\u0447\u0430\u0442\u044c? *")
+        root.addWidget(self.meaning_text_label)
+
+        self.meaning_text_edit = QPlainTextEdit()
+        self.meaning_text_edit.setPlaceholderText(
+            "\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u0439 \u0442\u0435\u043a\u0441\u0442 \u043d\u043e\u0442\u0430\u0446\u0438\u0438 "
+            "'\u0427\u0442\u043e \u044d\u0442\u043e \u0431\u0443\u0434\u0435\u0442 \u043e\u0437\u043d\u0430\u0447\u0430\u0442\u044c?' "
+            "(\u043c\u043e\u0436\u043d\u043e \u0440\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c)."
+        )
+        self.meaning_text_edit.setMinimumHeight(110)
+        self.meaning_text_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.meaning_text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.meaning_text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        root.addWidget(self.meaning_text_edit)
 
         self.why_label = QLabel("Почему?")
         root.addWidget(self.why_label)
@@ -979,14 +1009,24 @@ class TransitionScenarioWidget(QFrame):
         self._update_image_titles()
 
         self.notation_edit.setText(data.notation)
+        self.scenario_text_edit.setPlainText(data.scenario_text)
         self.meaning_notation_edit.setText(data.meaning_notation)
+        self.meaning_text_edit.setPlainText(data.meaning_text)
         self.manual_edit.setPlainText(data.why_text)
+        self._auto_generated_scenario_text = self._generated_scenario_text(self.notation_edit.text().strip())
+        if not data.scenario_text.strip():
+            self._sync_scenario_text_with_notation()
+        self._auto_generated_meaning_text = self._generated_meaning_text(self.meaning_notation_edit.text().strip())
+        if not data.meaning_text.strip():
+            self._sync_meaning_text_with_notation()
 
         self._on_notation_changed()
         self._on_meaning_notation_changed()
 
         self.notation_edit.textChanged.connect(self._on_notation_changed)
+        self.scenario_text_edit.textChanged.connect(self.changed)
         self.meaning_notation_edit.textChanged.connect(self._on_meaning_notation_changed)
+        self.meaning_text_edit.textChanged.connect(self.changed)
         self.manual_edit.textChanged.connect(self.changed)
 
     def set_index(self, index: int) -> None:
@@ -1004,6 +1044,9 @@ class TransitionScenarioWidget(QFrame):
         self.remove_button.setVisible(not read_mode)
         self.notation_label.setVisible(not read_mode)
         self.notation_edit.setVisible(not read_mode)
+        self.scenario_text_label.setVisible(True)
+        self.scenario_text_edit.setReadOnly(read_mode)
+        self.meaning_text_edit.setReadOnly(read_mode)
         self.manual_edit.setReadOnly(read_mode)
         for image in self._images:
             image.set_read_mode(read_mode)
@@ -1013,7 +1056,9 @@ class TransitionScenarioWidget(QFrame):
         return TransitionScenarioData(
             images=[entry.to_data() for entry in self._images],
             notation=self.notation_edit.text().strip(),
+            scenario_text=self.scenario_text_edit.toPlainText().strip(),
             meaning_notation=self.meaning_notation_edit.text().strip(),
+            meaning_text=self.meaning_text_edit.toPlainText().strip(),
             why_text=self.manual_edit.toPlainText().strip(),
         )
 
@@ -1037,6 +1082,9 @@ class TransitionScenarioWidget(QFrame):
         if not generated:
             return False, "Нотация пуста."
 
+        if not self.scenario_text_edit.toPlainText().strip():
+            return False, "Заполните поле 'Сценарий перехода к сделке'."
+
         action = transition_action_from_notation(notation_text)
         if action is None:
             return False, "Укажите CREATE/NOT CREATE/GET/NOT GET."
@@ -1052,6 +1100,9 @@ class TransitionScenarioWidget(QFrame):
         if not meaning_generated:
             return False, "Нотация 'Что это будет означать?' пуста."
 
+        if not self.meaning_text_edit.toPlainText().strip():
+            return False, "\u0417\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u043f\u043e\u043b\u0435 '\u0427\u0442\u043e \u044d\u0442\u043e \u0431\u0443\u0434\u0435\u0442 \u043e\u0437\u043d\u0430\u0447\u0430\u0442\u044c?'."
+
         if not self.manual_edit.toPlainText().strip():
             return False, "Заполните поле 'Почему?'."
 
@@ -1060,7 +1111,9 @@ class TransitionScenarioWidget(QFrame):
     def to_markdown(self, index: int, base_dir: Path | None) -> str:
         data = self.to_data()
         notation_generated, _ = transition_notation_to_text(data.notation)
+        scenario_text = data.scenario_text.strip() or (notation_generated or "")
         meaning_generated, _ = transition_meaning_notation_to_text(data.meaning_notation)
+        meaning_text = data.meaning_text.strip() or (meaning_generated or "")
 
         parts = [f"#### Сценарий {index}"]
         for image_index, image in enumerate(data.images, start=1):
@@ -1082,12 +1135,31 @@ class TransitionScenarioWidget(QFrame):
             ]
         )
 
+        if scenario_text:
+            parts.extend(
+                [
+                    "",
+                    "<!-- TRANSITION_SCENARIO_TEXT",
+                    scenario_text,
+                    "-->",
+                ]
+            )
+
         if data.meaning_notation.strip():
             parts.extend(
                 [
                     "",
                     "<!-- TRANSITION_MEANING_NOTATION",
                     data.meaning_notation.strip(),
+                    "-->",
+                ]
+            )
+        if meaning_text:
+            parts.extend(
+                [
+                    "",
+                    "<!-- TRANSITION_MEANING_TEXT",
+                    meaning_text,
                     "-->",
                 ]
             )
@@ -1101,18 +1173,19 @@ class TransitionScenarioWidget(QFrame):
                 ]
             )
 
-        if notation_generated:
+        if scenario_text:
             parts.extend(
                 [
                     "",
-                    f"**Сценарий перехода к сделке:** {notation_generated}",
+                    "**Сценарий перехода к сделке:**",
+                    scenario_text,
                 ]
             )
-        if meaning_generated:
+        if meaning_text:
             parts.extend(
                 [
                     "",
-                    f"**Что это будет означать?:** {meaning_generated}",
+                    f"**Что это будет означать?:** {meaning_text}",
                 ]
             )
         if data.why_text.strip():
@@ -1185,6 +1258,7 @@ class TransitionScenarioWidget(QFrame):
     def _on_notation_changed(self) -> None:
         notation_text = self.notation_edit.text().strip()
         generated, error = transition_notation_to_text(notation_text)
+        self._sync_scenario_text_with_notation()
         has_action = transition_action_from_notation(notation_text) is not None
         self._set_follow_up_visible(has_action)
         self._on_meaning_notation_changed(emit_change=False)
@@ -1198,7 +1272,62 @@ class TransitionScenarioWidget(QFrame):
         self.notation_status.setStyleSheet("color: #24d061;")
         self.changed.emit()
 
+    @staticmethod
+    def _generated_scenario_text(notation_text: str) -> str:
+        generated, error = transition_notation_to_text(notation_text)
+        if error or not generated:
+            return ""
+        return generated.strip()
+
+    def _sync_scenario_text_with_notation(self) -> None:
+        notation_text = self.notation_edit.text().strip()
+        generated = self._generated_scenario_text(notation_text)
+        current_text = self.scenario_text_edit.toPlainText().strip()
+
+        if notation_text and not generated:
+            return
+
+        should_overwrite = not current_text or current_text == self._auto_generated_scenario_text
+        self._auto_generated_scenario_text = generated
+        if not should_overwrite:
+            return
+
+        if current_text == generated:
+            return
+
+        self.scenario_text_edit.blockSignals(True)
+        self.scenario_text_edit.setPlainText(generated)
+        self.scenario_text_edit.blockSignals(False)
+
+    @staticmethod
+    def _generated_meaning_text(notation_text: str) -> str:
+        generated, error = transition_meaning_notation_to_text(notation_text)
+        if error or not generated:
+            return ""
+        return generated.strip()
+
+    def _sync_meaning_text_with_notation(self) -> None:
+        notation_text = self.meaning_notation_edit.text().strip()
+        generated = self._generated_meaning_text(notation_text)
+        current_text = self.meaning_text_edit.toPlainText().strip()
+
+        if notation_text and not generated:
+            return
+
+        should_overwrite = not current_text or current_text == self._auto_generated_meaning_text
+        self._auto_generated_meaning_text = generated
+        if not should_overwrite:
+            return
+
+        if current_text == generated:
+            return
+
+        self.meaning_text_edit.blockSignals(True)
+        self.meaning_text_edit.setPlainText(generated)
+        self.meaning_text_edit.blockSignals(False)
+
     def _on_meaning_notation_changed(self, emit_change: bool = True) -> None:
+        self._sync_meaning_text_with_notation()
         if not self._follow_up_visible:
             self.meaning_status.clear()
             if emit_change:
@@ -1228,9 +1357,11 @@ class TransitionScenarioWidget(QFrame):
 
     def _set_follow_up_visible(self, visible: bool) -> None:
         self._follow_up_visible = visible
-        self.meaning_label.setVisible(visible)
+        self.meaning_label.setVisible(visible and (not self._read_mode))
         self.meaning_notation_edit.setVisible(visible and (not self._read_mode))
-        self.meaning_status.setVisible(visible)
+        self.meaning_status.setVisible(visible and (not self._read_mode))
+        self.meaning_text_label.setVisible(visible)
+        self.meaning_text_edit.setVisible(visible)
         self.why_label.setVisible(visible)
         self.manual_edit.setVisible(visible)
 
@@ -1246,6 +1377,7 @@ class TransitionScenarioWidget(QFrame):
 
 class TransitionScenariosEditor(QWidget):
     content_changed = Signal()
+    template_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1266,6 +1398,9 @@ class TransitionScenariosEditor(QWidget):
         self.paste_image_button = QPushButton("Вставить из буфера")
         self.paste_image_button.clicked.connect(self._on_paste_image_clicked)
         top_row.addWidget(self.paste_image_button)
+        self.use_templates_button = QPushButton("Использовать шаблоны")
+        self.use_templates_button.clicked.connect(lambda: self.template_requested.emit())
+        top_row.addWidget(self.use_templates_button)
         top_row.addStretch(1)
         root.addLayout(top_row)
 
@@ -1293,8 +1428,15 @@ class TransitionScenariosEditor(QWidget):
         self._read_mode = read_mode
         self.add_image_button.setVisible(not read_mode)
         self.paste_image_button.setVisible(not read_mode)
+        self.use_templates_button.setVisible(not read_mode)
         for entry in self._entries:
             entry.set_read_mode(read_mode)
+
+    def append_entry(self, data: TransitionScenarioData) -> None:
+        self._add_entry_widget(data)
+        self._update_entry_titles()
+        self._update_empty_state()
+        self.content_changed.emit()
 
     def load_from_markdown(self, markdown: str) -> None:
         self._clear_entries()
@@ -1404,7 +1546,30 @@ class TransitionScenariosEditor(QWidget):
             notation_match = re.search(r"(?is)Notation:\s*\n(.*?)(?:\n\s*Text:|\Z)", chunk)
             notation = notation_match.group(1).strip() if notation_match else ""
 
+        scenario_text = TransitionScenariosEditor._extract_comment(chunk, "TRANSITION_SCENARIO_TEXT")
+        if not scenario_text:
+            scenario_block_match = re.search(
+                r"(?is)\*\*Сценарий перехода к сделке:\*\*\s*(.*?)(?:\n\s*\*\*Что это будет означать\?:\*\*|\n\s*\*\*Почему\?:\*\*|\Z)",
+                chunk,
+            )
+            scenario_text = scenario_block_match.group(1).strip() if scenario_block_match else ""
+        if not scenario_text:
+            generated, error = transition_notation_to_text(notation)
+            if not error and generated:
+                scenario_text = generated.strip()
+
         meaning_notation = TransitionScenariosEditor._extract_comment(chunk, "TRANSITION_MEANING_NOTATION")
+        meaning_text = TransitionScenariosEditor._extract_comment(chunk, "TRANSITION_MEANING_TEXT")
+        if not meaning_text:
+            meaning_match = re.search(
+                r"(?is)\*\*Что это будет означать\?:\*\*\s*(.*?)(?:\n\s*\*\*Почему\?:\*\*|\Z)",
+                chunk,
+            )
+            meaning_text = meaning_match.group(1).strip() if meaning_match else ""
+        if not meaning_text:
+            generated, error = transition_meaning_notation_to_text(meaning_notation)
+            if not error and generated:
+                meaning_text = generated.strip()
         why_text = TransitionScenariosEditor._extract_comment(chunk, "TRANSITION_WHY")
 
         if not why_text:
@@ -1414,7 +1579,9 @@ class TransitionScenariosEditor(QWidget):
         return TransitionScenarioData(
             images=images,
             notation=notation,
+            scenario_text=scenario_text,
             meaning_notation=meaning_notation,
+            meaning_text=meaning_text,
             why_text=why_text,
         )
 
@@ -1441,7 +1608,13 @@ class TransitionScenariosEditor(QWidget):
         for index, entry in enumerate(self._entries, start=1):
             data = entry.to_data()
             reference = data.notation.strip() or f"Сценарий #{index}"
-            preview_source = data.notation.strip() or data.meaning_notation.strip() or data.why_text.strip()
+            preview_source = (
+                data.scenario_text.strip()
+                or data.notation.strip()
+                or data.meaning_text.strip()
+                or data.meaning_notation.strip()
+                or data.why_text.strip()
+            )
             preview = re.sub(r"\s+", " ", preview_source).strip()
             if len(preview) > 90:
                 preview = f"{preview[:87]}..."

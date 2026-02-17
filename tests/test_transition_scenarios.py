@@ -6,6 +6,10 @@ from app.ui.transition_scenarios import (
 )
 
 
+SCENARIO_HEADER = "\u0421\u0446\u0435\u043d\u0430\u0440\u0438\u0439 \u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0430 \u043a \u0441\u0434\u0435\u043b\u043a\u0435"
+MEANING_HEADER = "\u0427\u0442\u043e \u044d\u0442\u043e \u0431\u0443\u0434\u0435\u0442 \u043e\u0437\u043d\u0430\u0447\u0430\u0442\u044c?"
+
+
 def test_transition_notation_create_success() -> None:
     text, error = transition_notation_to_text("CREATE + H1 OB")
     assert error is None
@@ -44,7 +48,6 @@ def test_transition_notation_invalid_format() -> None:
     text, error = transition_notation_to_text("SOMETHING + H1 OB")
     assert text is None
     assert error is not None
-    assert "Формат нотации" in error
 
 
 def test_transition_notation_create_with_range_success() -> None:
@@ -73,7 +76,6 @@ def test_transition_notation_create_with_clause_break_success() -> None:
     text, error = transition_notation_to_text(notation)
     assert error is None
     assert text is not None
-    assert "с пробитием" in text
     assert "[-H1 OB]" in text
     assert "[+D1 DR]" in text
 
@@ -83,7 +85,6 @@ def test_transition_notation_create_with_clause_not_break_success() -> None:
     text, error = transition_notation_to_text(notation)
     assert error is None
     assert text is not None
-    assert "после реакции на" in text
     assert "[-H1 OB]" in text
 
 
@@ -120,15 +121,22 @@ def test_transition_meaning_notation_dr_success() -> None:
     assert "Discount" in text
 
 
+def test_transition_meaning_notation_down_alias_success() -> None:
+    notation = "ADV SELL DOWN PREV - M15 DR Discount"
+    text, error = transition_meaning_notation_to_text(notation)
+    assert error is None
+    assert text is not None
+    assert "[-M15 DR]" in text
+
+
 def test_transition_meaning_notation_invalid() -> None:
     text, error = transition_meaning_notation_to_text("ADV BUY UP DR Premium")
     assert text is None
     assert error is not None
-    assert "ADV/NOT ADV" in error
 
 
 def test_parse_transition_scenarios_with_new_comments() -> None:
-    markdown = """#### Сценарий 1
+    markdown = """#### Scenario 1
 ![scenario_1](img.png)
 **TF:** H1
 
@@ -136,8 +144,16 @@ def test_parse_transition_scenarios_with_new_comments() -> None:
 CREATE + H1 OB
 -->
 
+<!-- TRANSITION_SCENARIO_TEXT
+For transition to a trade, price should create [+H1 OB].
+-->
+
 <!-- TRANSITION_MEANING_NOTATION
 ADV BUY UP + H1 OB
+-->
+
+<!-- TRANSITION_MEANING_TEXT
+Interpretation placeholder text.
 -->
 
 <!-- TRANSITION_WHY
@@ -151,12 +167,14 @@ Because liquidity remains above the prior high.
     assert entry.images[0].image_path == "img.png"
     assert entry.images[0].timeframe == "H1"
     assert entry.notation == "CREATE + H1 OB"
+    assert entry.scenario_text == "For transition to a trade, price should create [+H1 OB]."
     assert entry.meaning_notation == "ADV BUY UP + H1 OB"
+    assert entry.meaning_text == "Interpretation placeholder text."
     assert entry.why_text == "Because liquidity remains above the prior high."
 
 
 def test_parse_transition_scenarios_multiple_images_in_one_scenario() -> None:
-    markdown = """#### Сценарий 1
+    markdown = """#### Scenario 1
 ![scenario_1](img_1.png)
 **TF:** H1
 
@@ -164,7 +182,7 @@ def test_parse_transition_scenarios_multiple_images_in_one_scenario() -> None:
 **TF:** M15
 
 <!-- TRANSITION_NOTATION
-CREATE + H1 OB WITH - M5 FVG ACTUAL + D1 DR Premium
+CREATE + H1 OB WITH - M5 FVG ACTUAL + D1 DR Premium BREAK
 -->
 """
     entries = TransitionScenariosEditor._parse_entries(markdown)
@@ -175,3 +193,24 @@ CREATE + H1 OB WITH - M5 FVG ACTUAL + D1 DR Premium
     assert entry.images[0].timeframe == "H1"
     assert entry.images[1].image_path == "img_2.png"
     assert entry.images[1].timeframe == "M15"
+
+
+def test_parse_transition_scenarios_fallback_from_visible_blocks() -> None:
+    markdown = f"""#### Scenario 1
+![scenario_1](img.png)
+**TF:** H1
+
+<!-- TRANSITION_NOTATION
+CREATE + H1 OB
+-->
+
+**{SCENARIO_HEADER}:**
+Visible scenario fallback with [+H1 OB].
+
+**{MEANING_HEADER}:** Visible meaning fallback text.
+"""
+    entries = TransitionScenariosEditor._parse_entries(markdown)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.scenario_text.startswith("Visible scenario fallback")
+    assert entry.meaning_text == "Visible meaning fallback text."

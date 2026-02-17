@@ -1,0 +1,26 @@
+{
+  "id": "breakout_inefficiency",
+  "name": "Пробой области с образованием неэффективности",
+  "description": "Описание редактируется в этом файле: app/ui/templates/breakout_inefficiency.json, поле description.",
+  "image": "template_breakout.jpg",
+  "random_options": {
+    "signs": ["+", "-"],
+    "timeframes": ["M1", "M5", "M15", "H1", "H4", "D1"],
+    "elements": ["RB", "FVG", "SNR", "FL", "FH"],
+    "zones": ["Premium", "Discount", "Equilibrium"],
+    "sides": ["SELL", "BUY"],
+    "levels": ["UP", "DOWN"],
+    "range_kinds": ["ACTUAL", "PREV"]
+  },
+  "defaults": {
+    "breakout_range_kind": "PREV",
+    "inefficiency_range_kind": "ACTUAL"
+  },
+  "text_templates": {
+    "why": "Шаблон \"{template_name}\" выбран: подтверждение ожидаем через сочетание пробоя и неэффективности.",
+    "idea": "Сценарий сделки: {transition_text}",
+    "entry": "Вход только после подтверждения сценария. База: {meaning_text}",
+    "sl": "SL размещается за уровнем, который отменяет сценарий {template_name}.",
+    "tp": "TP ведется в направлении {side} / {level} согласно сценарию: {meaning_text}"
+  }
+}

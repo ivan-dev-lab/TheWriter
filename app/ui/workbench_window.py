@@ -45,6 +45,7 @@ from ..core.storage import PlanFileInfo, build_draft_path, list_markdown_files, 
 from ..settings import AppSettings, get_default_workspace_dir
 from .current_situation import CurrentSituationEditor, notation_to_text as current_situation_notation_to_text
 from .deal_scenarios import DealScenariosEditor
+from .scenario_template_dialog import ScenarioTemplateDialog
 from .theme import ThemeTokens, build_app_stylesheet, build_markdown_css, get_theme_tokens
 from .transition_scenarios import TransitionScenariosEditor
 
@@ -660,6 +661,7 @@ class MainWindow(QMainWindow):
 
         self.title_edit.textChanged.connect(self._on_editor_changed)
         self.current_situation_editor.content_changed.connect(self._on_editor_changed)
+        self.transition_scenarios_editor.template_requested.connect(self._open_scenario_template_dialog)
         self.transition_scenarios_editor.content_changed.connect(self._sync_deal_transition_choices)
         self.transition_scenarios_editor.content_changed.connect(self._on_editor_changed)
         self.deal_scenarios_editor.content_changed.connect(self._on_editor_changed)
@@ -971,6 +973,27 @@ class MainWindow(QMainWindow):
         self.deal_scenarios_editor.set_transition_choices(self.transition_scenarios_editor.scenario_choices())
         self._refresh_section_statuses()
         self._refresh_context_status()
+
+    def _open_scenario_template_dialog(self) -> None:
+        if not self._editor_in_structured_mode():
+            return
+        if self._editor_mode == "read":
+            self.statusBar().showMessage("Шаблоны доступны только в режиме редактирования", 3000)
+            return
+
+        dialog = ScenarioTemplateDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        result = dialog.selected_result()
+        if result is None:
+            return
+
+        self.transition_scenarios_editor.append_entry(result.transition_data)
+        self._sync_deal_transition_choices()
+        self.deal_scenarios_editor.append_entry(result.deal_data)
+        self._sync_deal_transition_choices()
+        self.statusBar().showMessage("Шаблон применён: добавлены сценарий перехода и сделка", 4000)
 
     def _update_file_status_label(self) -> None:
         if self.current_file:

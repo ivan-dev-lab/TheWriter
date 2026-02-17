@@ -543,6 +543,12 @@ class DealScenariosEditor(QWidget):
         for entry in self._entries:
             entry.set_transition_choices(choices)
 
+    def append_entry(self, data: DealScenarioData) -> None:
+        self._add_entry_widget(data)
+        self._update_entry_titles()
+        self._update_empty_state()
+        self.content_changed.emit()
+
     def load_from_markdown(self, markdown: str) -> None:
         self._clear_entries()
         for data in self._parse_entries(markdown):
