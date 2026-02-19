@@ -46,7 +46,7 @@
     "inefficiency_range_kind": "ACTUAL"
   },
   "notation_templates": {
-    "transition": "CREATE {breakout_sign} {breakout_tf} {breakout_element} {breakout_range_kind} {breakout_range_sign} {breakout_range_tf} DR {breakout_range_zone} WITH {inefficiency_sign} {inefficiency_tf} {inefficiency_element} {inefficiency_range_kind} {inefficiency_range_sign} {inefficiency_range_tf} DR {inefficiency_range_zone} BREAK",
+    "transition": "CREATE {inefficiency_sign} {inefficiency_tf} {inefficiency_element} {inefficiency_range_kind} {inefficiency_range_sign} {inefficiency_range_tf} DR {inefficiency_range_zone} WITH {breakout_sign} {breakout_tf} {breakout_element} {breakout_range_kind} {breakout_range_sign} {breakout_range_tf} DR {breakout_range_zone} BREAK",
     "meaning": "ADV {side} {level} {meaning_range_kind} {meaning_range_sign} {meaning_range_tf} DR {meaning_range_zone}"
   },
   "text_templates": {
@@ -54,6 +54,6 @@
     "idea": "После формирования неэффективности {side_ru} в момент пробития [{inefficiency_sign}{inefficiency_tf} {inefficiency_element}] логично ожидать дальнейшую доставку цены до ...",
     "entry": "Конкретная точка входа будет определена после формирования [{inefficiency_sign}{inefficiency_tf} {inefficiency_element}]. Предварительно планируется вход лимитным ордером от [{inefficiency_sign}{inefficiency_tf} {inefficiency_element}] - элемента неэффективности. С учётом идеи сделки более выгодного и логичного размещения точки входа не предусмотрено.",
     "sl": "SL расположен за [{inefficiency_sign}{inefficiency_tf} {inefficiency_element}], который должен сформироваться в процессе пробития [{breakout_sign}{breakout_tf} {breakout_element}]. Образованный элемент неэффективности рассматривается как ключевая область и маркер силы {side_ru}.В случае пробития [{inefficiency_sign}{inefficiency_tf} {inefficiency_element}] сценарий о преимуществе {side_ru} в отметках проблемной области [{breakout_sign}{breakout_tf} {breakout_element}] считается отменённым",
-    "tp": "Ближайший [] - оптимальная цель, поскольку: \n 1. Цена от неё уже получала реакцию => цель эффективна 2. До неё нет иных проблемных областей на ... TF => цель ближайшая 3. Нет прочих факторов, показывающих, что дальнейшие цели оптимальны"
+    "tp": "Ближайший [] - оптимальная цель, поскольку:\n"
   }
 }
