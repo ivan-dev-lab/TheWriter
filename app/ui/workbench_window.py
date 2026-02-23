@@ -42,7 +42,14 @@ from PySide6.QtWidgets import (
 from ..core.autosave import AutoSaveController
 from ..core.plans import TradingPlan, apply_title_to_markdown
 from ..core.storage import PlanFileInfo, build_draft_path, list_markdown_files, read_markdown, save_markdown
-from ..settings import AppSettings, get_default_workspace_dir
+from ..settings import (
+    APP_NAME,
+    LEGACY_PLANS_DIRECTORY_NAMES,
+    PLANS_DIRECTORY_NAME,
+    AppSettings,
+    get_default_workspace_dir,
+    is_plans_directory_name,
+)
 from .current_situation import CurrentSituationEditor, notation_to_text as current_situation_notation_to_text
 from .deal_scenarios import DealScenariosEditor
 from .scenario_template_dialog import ScenarioTemplateDialog
@@ -208,7 +215,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _normalize_root_directory(directory: Path) -> Path:
-        if directory.name.casefold() == "plans" and directory.parent != directory:
+        if is_plans_directory_name(directory.name) and directory.parent != directory:
             return directory.parent
         return directory
 
@@ -244,7 +251,7 @@ class MainWindow(QMainWindow):
         self._sidebar_mode = "plans"
         self._editor_mode = "edit"
 
-        self.setWindowTitle("TheWriter - Торговые планы[*]")
+        self.setWindowTitle(f"{APP_NAME} - Торговые планы[*]")
         self.setMinimumSize(1260, 780)
 
         self._create_actions()
@@ -1059,6 +1066,26 @@ class MainWindow(QMainWindow):
         self._sync_structured_editors_base_dir()
         self._refresh_file_list()
 
+    def _resolve_plans_directory(self) -> Path | None:
+        if not self.current_directory:
+            return None
+
+        primary = self.current_directory / PLANS_DIRECTORY_NAME
+        if primary.exists():
+            return primary
+
+        for legacy_name in LEGACY_PLANS_DIRECTORY_NAMES:
+            legacy_dir = self.current_directory / legacy_name
+            if not legacy_dir.exists() or not legacy_dir.is_dir():
+                continue
+            try:
+                legacy_dir.rename(primary)
+                return primary
+            except OSError:
+                return legacy_dir
+
+        return primary
+
     def _refresh_file_list(self, show_message: bool = True) -> None:
         self.file_list.clear()
 
@@ -1067,7 +1094,11 @@ class MainWindow(QMainWindow):
             self.file_cache = []
             return
 
-        plans_dir = self.current_directory / "Plans"
+        plans_dir = self._resolve_plans_directory()
+        if plans_dir is None:
+            self.folder_label.setText("Папка: не выбрана")
+            self.file_cache = []
+            return
         plans_dir.mkdir(parents=True, exist_ok=True)
         self.folder_label.setText(f"Папка: {plans_dir}")
         try:
@@ -1268,7 +1299,7 @@ class MainWindow(QMainWindow):
     def _resolve_root_directory_from_plan_path(path: Path) -> Path:
         current = path.parent
         while True:
-            if current.name.casefold() == "plans" and current.parent != current:
+            if is_plans_directory_name(current.name) and current.parent != current:
                 return current.parent
             if current.parent == current:
                 break
@@ -1290,7 +1321,7 @@ class MainWindow(QMainWindow):
             return None
 
         plan_name = self._sanitize_plan_folder_name(self.title_edit.text().strip() or "plan")
-        return root_dir / "Plans" / plan_name / f"{plan_name}.md"
+        return root_dir / PLANS_DIRECTORY_NAME / plan_name / f"{plan_name}.md"
 
     def _all_image_widgets(self) -> list[object]:
         return [
@@ -1321,8 +1352,8 @@ class MainWindow(QMainWindow):
 
         current_path = self.current_file
         if (
-            current_path.parent.parent.name.casefold() != "plans"
-            or target_path.parent.parent.name.casefold() != "plans"
+            not is_plans_directory_name(current_path.parent.parent.name)
+            or not is_plans_directory_name(target_path.parent.parent.name)
             or current_path.parent.parent != target_path.parent.parent
         ):
             return target_path
@@ -1385,12 +1416,12 @@ class MainWindow(QMainWindow):
 
         folder_name = self._sanitize_plan_folder_name(target_path.stem)
         if (
-            target_path.parent.parent.name.casefold() == "plans"
+            is_plans_directory_name(target_path.parent.parent.name)
             and target_path.parent.name.casefold() == folder_name.casefold()
         ):
             images_dir = target_path.parent
         else:
-            images_dir = target_path.parent / "Plans" / folder_name
+            images_dir = target_path.parent / PLANS_DIRECTORY_NAME / folder_name
         images_dir.mkdir(parents=True, exist_ok=True)
 
         widgets = self._all_image_widgets()
@@ -1864,3 +1895,4 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         event.ignore()
+

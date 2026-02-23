@@ -1,2 +1,2 @@
-"""TheWriter application package."""
+"""Censor application package."""
 

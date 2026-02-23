@@ -1,2 +1,2 @@
-"""Core domain logic for TheWriter."""
+"""Core domain logic for Censor."""
 

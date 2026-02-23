@@ -1,4 +1,4 @@
-# TheWriter
+# Censor
 
 GUI-приложение на Python/PySide6 для просмотра и редактирования торговых планов в Markdown.
 

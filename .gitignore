@@ -3,9 +3,10 @@ __pycache__/
 .pytest_cache/
 ТЕСТОВЫЕ ПЛАНЫ/
 Plans/
+Censor Plans/
 main/
 *.ico
 *.txt
-TheWriter/
+Censor/
 *.exe
 *.spec

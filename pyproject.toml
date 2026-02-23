@@ -1,5 +1,5 @@
 [project]
-name = "thewriter"
+name = "censor"
 version = "0.1.0"
 description = "Desktop markdown trading plan editor."
 readme = "README.md"

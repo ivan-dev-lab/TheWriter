@@ -6,8 +6,17 @@ import os
 from pathlib import Path
 import sys
 
-APP_NAME = "TheWriter"
+APP_NAME = "Censor"
+PLANS_DIRECTORY_NAME = "Censor Plans"
+LEGACY_PLANS_DIRECTORY_NAMES = ("plans",)
 SETTINGS_FILENAME = "settings.json"
+
+
+def is_plans_directory_name(name: str) -> bool:
+    normalized = name.strip().casefold()
+    if not normalized:
+        return False
+    return normalized == PLANS_DIRECTORY_NAME.casefold() or normalized in LEGACY_PLANS_DIRECTORY_NAMES
 
 
 def get_config_dir(app_name: str = APP_NAME) -> Path:

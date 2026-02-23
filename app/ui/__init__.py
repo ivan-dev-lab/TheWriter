@@ -1,2 +1,2 @@
-"""UI layer for TheWriter."""
+"""UI layer for Censor."""
 

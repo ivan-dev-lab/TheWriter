@@ -36,7 +36,7 @@ def image_path_from_clipboard() -> Path | None:
         if image.isNull():
             return None
 
-    target_dir = Path(gettempdir()) / "thewriter_clipboard"
+    target_dir = Path(gettempdir()) / "censor_clipboard"
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"clipboard_{datetime.now():%Y%m%d_%H%M%S_%f}_{uuid4().hex[:8]}.png"
     if not image.save(str(target_path), "PNG"):
